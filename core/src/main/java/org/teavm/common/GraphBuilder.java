@@ -17,6 +17,7 @@ package org.teavm.common;
 
 import com.carrotsearch.hppc.IntOpenHashSet;
 import com.carrotsearch.hppc.IntSet;
+import com.carrotsearch.hppc.cursors.IntCursor;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -73,80 +74,131 @@ public class GraphBuilder {
 
     public Graph build() {
         if (builtGraph == null) {
+            IntegerArray data = new IntegerArray(0);
+            data.addAll(new int[sz * 2 + 1]);
+
+            int index = 0;
+
             IntSet[] incomingEdges = new IntSet[sz];
             for (int i = 0; i < sz; ++i) {
                 incomingEdges[i] = new IntOpenHashSet();
             }
-            int[][] outgoingEdgeList = new int[sz][];
+
             for (int i = 0; i < addedEdges.size(); ++i) {
-                IntSet edgeList = addedEdges.get(i);
-                outgoingEdgeList[i] = edgeList != null ? edgeList.toArray() : new int[0];
-                Arrays.sort(outgoingEdgeList[i]);
-                for (int j : outgoingEdgeList[i]) {
-                    incomingEdges[j].add(i);
+                if (addedEdges.get(i) != null) {
+                    for (IntCursor cursor : addedEdges.get(i)) {
+                        incomingEdges[cursor.value].add(i);
+                    }
                 }
             }
-            for (int i = addedEdges.size(); i < sz; ++i) {
-                outgoingEdgeList[i] = new int[0];
-            }
-            int[][] incomingEdgeList = new int[sz][];
+
             for (int i = 0; i < sz; ++i) {
-                incomingEdgeList[i] = incomingEdges[i].toArray();
-                Arrays.sort(incomingEdgeList[i]);
+                IntSet outgoing = i < addedEdges.size() ? addedEdges.get(i) : null;
+                data.set(index++, data.size());
+                int[] outgoingArray = outgoing != null ? outgoing.toArray() : new int[0];
+                Arrays.sort(outgoingArray);
+                data.addAll(outgoingArray);
+
+                data.set(index++, data.size());
+                int[] incomingArray = incomingEdges[i].toArray();
+                Arrays.sort(incomingArray);
+                data.addAll(incomingArray);
             }
-            builtGraph = new GraphImpl(incomingEdgeList, outgoingEdgeList);
+            data.set(index, data.size());
+
+            builtGraph = new GraphImpl(sz, data.getAll());
         }
         return builtGraph;
     }
 
-    private static class GraphImpl implements Graph {
-        private final int[][] incomingEdgeList;
-        private final int[][] outgoingEdgeList;
+    static class GraphImpl implements Graph {
+        private final int size;
+        private final int[] data;
 
-        public GraphImpl(int[][] incomingEdgeList, int[][] outgoingEdgeList) {
-            this.incomingEdgeList = incomingEdgeList;
-            this.outgoingEdgeList = outgoingEdgeList;
+        GraphImpl(int size, int[] data) {
+            this.size = size;
+            this.data = data;
         }
 
         @Override
         public int size() {
-            return incomingEdgeList.length;
+            return size;
         }
 
         @Override
         public int[] incomingEdges(int node) {
-            int[] result = incomingEdgeList[node];
-            return Arrays.copyOf(result, result.length);
+            checkRange(node);
+            int start = data[node * 2 + 1];
+            int end = data[node * 2 + 2];
+            return Arrays.copyOfRange(data, start, end);
         }
 
         @Override
         public int copyIncomingEdges(int node, int[] target) {
-            int[] result = incomingEdgeList[node];
-            System.arraycopy(result, 0, target, 0, result.length);
-            return result.length;
+            checkRange(node);
+            int start = data[node * 2 + 1];
+            int end = data[node * 2 + 2];
+            int size = Math.min(end - start, target.length);
+            System.arraycopy(data, start, target, 0, size);
+            return size;
         }
 
         @Override
         public int[] outgoingEdges(int node) {
-            int[] result = outgoingEdgeList[node];
-            return Arrays.copyOf(result, result.length);
+            checkRange(node);
+            int start = data[node * 2];
+            int end = data[node * 2 + 1];
+            return Arrays.copyOfRange(data, start, end);
         }
 
         @Override
         public int copyOutgoingEdges(int node, int[] target) {
-            int[] result = outgoingEdgeList[node];
-            System.arraycopy(result, 0, target, 0, result.length);
-            return result.length;
+            checkRange(node);
+            int start = data[node * 2];
+            int end = data[node * 2 + 1];
+            int size = Math.min(end - start, target.length);
+            System.arraycopy(data, start, target, 0, size);
+            return size;
         }
 
         @Override
         public int incomingEdgesCount(int node) {
-            return incomingEdgeList[node].length;
+            checkRange(node);
+            return data[node * 2 + 2] - data[node * 2 + 1];
         }
 
         @Override
         public int outgoingEdgesCount(int node) {
-            return outgoingEdgeList[node].length;
+            checkRange(node);
+            return data[node * 2 + 1] - data[node * 2];
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("digraph {\n");
+
+            for (int i = 0; i < size; ++i) {
+                if (outgoingEdgesCount(i) > 0) {
+                    sb.append("  ").append(i).append(" -> { ");
+                    int[] outgoingEdges = outgoingEdges(i);
+                    sb.append(outgoingEdges[0]);
+                    for (int j = 1; j < outgoingEdges.length; ++j) {
+                        sb.append(", ").append(outgoingEdges[j]);
+                    }
+                    sb.append(" }\n");
+                }
+            }
+
+            sb.append("}");
+
+            return sb.toString();
+        }
+
+        private void checkRange(int node) {
+            if (node < 0 || node >= size) {
+                throw new IndexOutOfBoundsException(node + " it out of range [0; " + size + ")");
+            }
         }
     }
 }
