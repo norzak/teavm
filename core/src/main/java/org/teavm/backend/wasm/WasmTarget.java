@@ -27,13 +27,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
+import org.teavm.ast.Mangling;
 import org.teavm.ast.decompilation.Decompiler;
 import org.teavm.backend.wasm.binary.BinaryWriter;
 import org.teavm.backend.wasm.generate.WasmClassGenerator;
 import org.teavm.backend.wasm.generate.WasmDependencyListener;
 import org.teavm.backend.wasm.generate.WasmGenerationContext;
 import org.teavm.backend.wasm.generate.WasmGenerator;
-import org.teavm.backend.wasm.generate.WasmMangling;
 import org.teavm.backend.wasm.generate.WasmStringPool;
 import org.teavm.backend.wasm.intrinsics.AddressIntrinsic;
 import org.teavm.backend.wasm.intrinsics.AllocatorIntrinsic;
@@ -71,7 +71,6 @@ import org.teavm.backend.wasm.model.expression.WasmReturn;
 import org.teavm.backend.wasm.model.expression.WasmSetLocal;
 import org.teavm.backend.wasm.model.expression.WasmStoreInt32;
 import org.teavm.backend.wasm.optimization.UnusedFunctionElimination;
-import org.teavm.backend.wasm.patches.ClassPatch;
 import org.teavm.backend.wasm.render.WasmBinaryRenderer;
 import org.teavm.backend.wasm.render.WasmBinaryVersion;
 import org.teavm.backend.wasm.render.WasmBinaryWriter;
@@ -114,6 +113,7 @@ import org.teavm.model.lowlevel.ClassInitializerEliminator;
 import org.teavm.model.lowlevel.ClassInitializerTransformer;
 import org.teavm.model.lowlevel.ShadowStackTransformer;
 import org.teavm.model.transformation.ClassInitializerInsertionTransformer;
+import org.teavm.model.transformation.ClassPatch;
 import org.teavm.runtime.Allocator;
 import org.teavm.runtime.ExceptionHandling;
 import org.teavm.runtime.RuntimeArray;
@@ -350,13 +350,13 @@ public class WasmTarget implements TeaVMTarget, TeaVMWasmHost {
             if (clinit == null) {
                 continue;
             }
-            initFunction.getBody().add(new WasmCall(WasmMangling.mangleInitializer(className)));
+            initFunction.getBody().add(new WasmCall(Mangling.mangleInitializer(className)));
         }
         module.add(initFunction);
         module.setStartFunction(initFunction);
 
         for (TeaVMEntryPoint entryPoint : controller.getEntryPoints().values()) {
-            String mangledName = WasmMangling.mangleMethod(entryPoint.getReference());
+            String mangledName = Mangling.mangleMethod(entryPoint.getReference());
             WasmFunction function = module.getFunctions().get(mangledName);
             if (function != null) {
                 function.setExportName(entryPoint.getPublicName());
@@ -511,7 +511,7 @@ public class WasmTarget implements TeaVMTarget, TeaVMWasmHost {
     private void generateIsSupertypeFunctions(TagRegistry tagRegistry, WasmModule module,
             WasmClassGenerator classGenerator) {
         for (ValueType type : classGenerator.getRegisteredClasses()) {
-            WasmFunction function = new WasmFunction(WasmMangling.mangleIsSupertype(type));
+            WasmFunction function = new WasmFunction(Mangling.mangleIsSupertype(type));
             function.getParameters().add(WasmType.INT32);
             function.setResult(WasmType.INT32);
             module.add(function);
@@ -603,7 +603,7 @@ public class WasmTarget implements TeaVMTarget, TeaVMWasmHost {
         itemTest.setType(WasmType.INT32);
         itemTest.getThenBlock().getBody().add(new WasmInt32Constant(0));
 
-        WasmCall delegateToItem = new WasmCall(WasmMangling.mangleIsSupertype(itemType));
+        WasmCall delegateToItem = new WasmCall(Mangling.mangleIsSupertype(itemType));
         delegateToItem.getArguments().add(new WasmGetLocal(subtypeVar));
         itemTest.getElseBlock().getBody().add(delegateToItem);
 
@@ -611,9 +611,9 @@ public class WasmTarget implements TeaVMTarget, TeaVMWasmHost {
     }
 
     private void generateStub(WasmModule module, MethodHolder method, MethodHolder implementor) {
-        WasmFunction function = module.getFunctions().get(WasmMangling.mangleMethod(method.getReference()));
+        WasmFunction function = module.getFunctions().get(Mangling.mangleMethod(method.getReference()));
 
-        WasmCall call = new WasmCall(WasmMangling.mangleMethod(implementor.getReference()));
+        WasmCall call = new WasmCall(Mangling.mangleMethod(implementor.getReference()));
         for (WasmType param : function.getParameters()) {
             WasmLocal local = new WasmLocal(param);
             function.add(local);
@@ -647,7 +647,7 @@ public class WasmTarget implements TeaVMTarget, TeaVMWasmHost {
                 continue;
             }
 
-            WasmFunction initFunction = new WasmFunction(WasmMangling.mangleInitializer(className));
+            WasmFunction initFunction = new WasmFunction(Mangling.mangleInitializer(className));
             module.add(initFunction);
 
             WasmBlock block = new WasmBlock(false);
@@ -667,7 +667,7 @@ public class WasmTarget implements TeaVMTarget, TeaVMWasmHost {
                     WasmInt32Subtype.INT32));
 
             if (method != null) {
-                block.getBody().add(new WasmCall(WasmMangling.mangleMethod(method.getReference())));
+                block.getBody().add(new WasmCall(Mangling.mangleMethod(method.getReference())));
             }
 
             if (controller.wasCancelled()) {

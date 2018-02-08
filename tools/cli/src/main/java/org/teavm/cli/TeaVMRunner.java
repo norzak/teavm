@@ -74,7 +74,7 @@ public final class TeaVMRunner {
         options.addOption(OptionBuilder
                 .withArgName("target")
                 .hasArg()
-                .withDescription("target type (javascript/js, webassembly/wasm)")
+                .withDescription("target type (javascript/js, webassembly/wasm, C)")
                 .create('t'));
         options.addOption(OptionBuilder
                 .withArgName("directory")
@@ -201,6 +201,9 @@ public final class TeaVMRunner {
                 case "webassembly":
                 case "wasm":
                     tool.setTargetType(TeaVMTargetType.WEBASSEMBLY);
+                    break;
+                case "c":
+                    tool.setTargetType(TeaVMTargetType.C);
                     break;
             }
         }

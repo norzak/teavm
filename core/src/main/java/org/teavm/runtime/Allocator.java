@@ -47,6 +47,7 @@ public final class Allocator {
         return result;
     }
 
+    @Unmanaged
     public static RuntimeArray allocateMultiArray(RuntimeClass tag, Address dimensions, int dimensionCount) {
         int size = dimensions.getInt();
         RuntimeArray array = allocateArray(tag, dimensions.getInt()).toStructure();

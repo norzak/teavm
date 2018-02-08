@@ -1,5 +1,5 @@
 /*
- *  Copyright 2016 Alexey Andreev.
+ *  Copyright 2018 Alexey Andreev.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -13,10 +13,16 @@
  *  See the License for the specific language governing permissions and
  *  limitations under the License.
  */
-package org.teavm.tooling;
+package org.teavm.backend.c.intrinsic;
 
-public enum TeaVMTargetType {
-    JAVASCRIPT,
-    WEBASSEMBLY,
-    C
+import org.teavm.ast.Expr;
+import org.teavm.backend.c.generate.CodeWriter;
+import org.teavm.backend.c.generate.NameProvider;
+
+public interface IntrinsicContext {
+    CodeWriter writer();
+
+    NameProvider names();
+
+    void emit(Expr expr);
 }
