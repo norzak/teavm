@@ -15,8 +15,8 @@
  */
 package org.teavm.parsing;
 
+import com.carrotsearch.hppc.IntIntHashMap;
 import com.carrotsearch.hppc.IntIntMap;
-import com.carrotsearch.hppc.IntIntOpenHashMap;
 import java.lang.reflect.Array;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -63,7 +63,7 @@ public class Parser {
         this.referenceCache = referenceCache;
     }
 
-    public MethodHolder parseMethod(MethodNode node, String className, String fileName) {
+    public MethodHolder parseMethod(MethodNode node, String fileName) {
         MethodNode nodeWithoutJsr = new MethodNode(Opcodes.ASM5, node.access, node.name, node.desc, node.signature,
                 node.exceptions.toArray(new String[0]));
         JSRInlinerAdapter adapter = new JSRInlinerAdapter(nodeWithoutJsr, node.access, node.name, node.desc,
@@ -76,7 +76,7 @@ public class Parser {
 
         ProgramParser programParser = new ProgramParser(referenceCache);
         programParser.setFileName(fileName);
-        Program program = programParser.parse(node, className);
+        Program program = programParser.parse(node);
         new UnreachableBasicBlockEliminator().optimize(program);
         PhiUpdater phiUpdater = new PhiUpdater();
         Variable[] argumentMapping = applySignature(program, method.getParameterTypes());
@@ -157,7 +157,7 @@ public class Parser {
         Step[] stack = new Step[program.basicBlockCount()];
         int top = 0;
 
-        IntIntOpenHashMap entryVarMap = new IntIntOpenHashMap();
+        IntIntHashMap entryVarMap = new IntIntHashMap();
         for (int i = 0; i < argumentMapping.length; ++i) {
             Variable arg = argumentMapping[i];
             if (arg != null) {
@@ -169,7 +169,7 @@ public class Parser {
         while (top > 0) {
             Step step = stack[--top];
             int node = step.node;
-            IntIntMap varMap = new IntIntOpenHashMap(step.varMap);
+            IntIntMap varMap = new IntIntHashMap(step.varMap);
             BasicBlock block = program.basicBlockAt(node);
 
             for (Phi phi : block.getPhis()) {
@@ -180,7 +180,7 @@ public class Parser {
                 }
             }
 
-            result[node] = new IntIntOpenHashMap(varMap);
+            result[node] = new IntIntHashMap(varMap);
 
             for (Instruction insn : block) {
                 insn.acceptVisitor(defExtractor);
@@ -193,7 +193,7 @@ public class Parser {
             }
 
             for (int successor : dom.outgoingEdges(node)) {
-                stack[top++] = new Step(successor, new IntIntOpenHashMap(varMap));
+                stack[top++] = new Step(successor, new IntIntHashMap(varMap));
             }
         }
 
@@ -245,7 +245,7 @@ public class Parser {
         }
         String fullFileName = node.name.substring(0, node.name.lastIndexOf('/') + 1) + node.sourceFile;
         for (MethodNode methodNode : node.methods) {
-            cls.addMethod(parseMethod(methodNode, node.name, fullFileName));
+            cls.addMethod(parseMethod(methodNode, fullFileName));
         }
         if (node.outerClass != null) {
             cls.setOwnerName(node.outerClass.replace('/', '.'));

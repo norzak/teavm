@@ -63,6 +63,7 @@ import org.teavm.model.optimization.LoopInvariantMotion;
 import org.teavm.model.optimization.MethodOptimization;
 import org.teavm.model.optimization.MethodOptimizationContext;
 import org.teavm.model.optimization.RedundantJumpElimination;
+import org.teavm.model.optimization.RedundantNullCheckElimination;
 import org.teavm.model.optimization.ScalarReplacement;
 import org.teavm.model.optimization.UnreachableBasicBlockElimination;
 import org.teavm.model.optimization.UnusedVariableElimination;
@@ -236,6 +237,11 @@ public class TeaVM implements TeaVMHost, ServiceRepository {
         return diagnostics;
     }
 
+    @Override
+    public String[] getPlatformTags() {
+        return target.getPlatformTags();
+    }
+
     /**
      * <p>Adds an entry point. TeaVM guarantees, that all methods that are required by the entry point
      * will be available at run-time in browser. Also you need to specify for each parameter of entry point
@@ -352,6 +358,7 @@ public class TeaVM implements TeaVMHost, ServiceRepository {
             return;
         }
 
+        dependencyAnalyzer.setAsyncSupported(target.isAsyncSupported());
         dependencyAnalyzer.setInterruptor(() -> progressListener.progressReached(0) == TeaVMProgressFeedback.CONTINUE);
         target.contributeDependencies(dependencyAnalyzer);
         dependencyAnalyzer.processDependencies();
@@ -379,6 +386,7 @@ public class TeaVM implements TeaVMHost, ServiceRepository {
                 return;
             }
 
+            dependencyAnalyzer.cleanup();
             inline(classSet, dependencyAnalyzer);
             if (wasCancelled()) {
                 return;
@@ -507,6 +515,8 @@ public class TeaVM implements TeaVMHost, ServiceRepository {
         MethodOptimizationContextImpl context = new MethodOptimizationContextImpl(method, classSource);
         if (optimizedProgram == null) {
             optimizedProgram = ProgramUtils.copy(method.getProgram());
+            target.beforeOptimizations(optimizedProgram, method, classSource);
+
             if (optimizedProgram.basicBlockCount() > 0) {
                 boolean changed;
                 do {
@@ -573,6 +583,7 @@ public class TeaVM implements TeaVMHost, ServiceRepository {
         }
         optimizations.add(new GlobalValueNumbering(optimizationLevel == TeaVMOptimizationLevel.SIMPLE));
         if (optimizationLevel.ordinal() >= TeaVMOptimizationLevel.ADVANCED.ordinal()) {
+            optimizations.add(new RedundantNullCheckElimination());
             optimizations.add(new ConstantConditionElimination());
             optimizations.add(new RedundantJumpElimination());
             optimizations.add(new UnusedVariableElimination());

@@ -64,22 +64,27 @@ import org.teavm.ast.WhileStatement;
 import org.teavm.model.TextLocation;
 
 class OptimizingVisitor implements StatementVisitor, ExprVisitor {
+    private static final int MAX_DEPTH = 20;
     private Expr resultExpr;
     Statement resultStmt;
     private final boolean[] preservedVars;
     private final int[] writeFrequencies;
+    private final int[] initialWriteFrequences;
     private final int[] readFrequencies;
+    private final Object[] constants;
     private List<Statement> resultSequence;
     private boolean friendlyToDebugger;
     private TextLocation currentLocation;
     private Deque<TextLocation> locationStack = new LinkedList<>();
     private Deque<TextLocation> notNullLocationStack = new ArrayDeque<>();
 
-    OptimizingVisitor(boolean[] preservedVars, int[] writeFrequencies, int[] readFrequencies,
+    OptimizingVisitor(boolean[] preservedVars, int[] writeFrequencies, int[] readFrequencies, Object[] constants,
             boolean friendlyToDebugger) {
         this.preservedVars = preservedVars;
         this.writeFrequencies = writeFrequencies;
+        this.initialWriteFrequences = writeFrequencies.clone();
         this.readFrequencies = readFrequencies;
+        this.constants = constants;
         this.friendlyToDebugger = friendlyToDebugger;
     }
 
@@ -271,6 +276,18 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
             int index = expr.getIndex();
             resultExpr = expr;
             if (writeFrequencies[index] != 1) {
+                return;
+            }
+
+            if (!preservedVars[index] && initialWriteFrequences[index] == 1 && constants[index] != null) {
+                ConstantExpr constantExpr = new ConstantExpr();
+                constantExpr.setValue(constants[index]);
+                constantExpr.setLocation(expr.getLocation());
+                resultExpr = constantExpr;
+                return;
+            }
+
+            if (locationStack.size() > MAX_DEPTH) {
                 return;
             }
             if (readFrequencies[index] != 1 || preservedVars[index]) {
@@ -542,6 +559,13 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
                 if (!(statement.getLeftValue() instanceof VariableExpr)) {
                     statement.getLeftValue().acceptVisitor(this);
                     left = resultExpr;
+                } else {
+                    int varIndex = ((VariableExpr) statement.getLeftValue()).getIndex();
+                    if (!preservedVars[varIndex] && initialWriteFrequences[varIndex] == 1
+                            && constants[varIndex] != null) {
+                        resultStmt = new SequentialStatement();
+                        return;
+                    }
                 }
                 statement.setLeftValue(left);
                 statement.setRightValue(right);
@@ -634,11 +658,14 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
         if (statements.isEmpty()) {
             return;
         }
+
+        boolean shouldOptimizeBreaks = !hitsRedundantBreakThreshold(statements, exit);
+
         for (int i = 0; i < statements.size(); ++i) {
             Statement stmt = statements.get(i);
             if (stmt instanceof ConditionalStatement) {
                 ConditionalStatement cond = (ConditionalStatement) stmt;
-                check_conditional: {
+                check_conditional: if (shouldOptimizeBreaks) {
                     last = cond.getConsequent().isEmpty() ? null
                             : cond.getConsequent().get(cond.getConsequent().size() - 1);
                     if (last instanceof BreakStatement) {
@@ -704,6 +731,37 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
         }
     }
 
+    private boolean hitsRedundantBreakThreshold(List<Statement> statements, IdentifiedStatement exit) {
+        int count = 0;
+        for (int i = 0; i < statements.size(); ++i) {
+            Statement stmt = statements.get(i);
+            if (!(stmt instanceof ConditionalStatement)) {
+                continue;
+            }
+
+            ConditionalStatement conditional = (ConditionalStatement) stmt;
+            if (!conditional.getConsequent().isEmpty() && !conditional.getAlternative().isEmpty()) {
+                continue;
+            }
+            List<Statement> innerStatements = !conditional.getConsequent().isEmpty()
+                    ? conditional.getConsequent() : conditional.getAlternative();
+            if (innerStatements.isEmpty()) {
+                continue;
+            }
+
+            Statement last = innerStatements.get(innerStatements.size() - 1);
+            if (!(last instanceof BreakStatement)) {
+                continue;
+            }
+
+            BreakStatement breakStmt = (BreakStatement) last;
+            if (exit != null && exit == breakStmt.getTarget() && ++count == 8) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private void normalizeConditional(ConditionalStatement stmt) {
         if (stmt.getConsequent().isEmpty()) {

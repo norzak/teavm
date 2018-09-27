@@ -15,16 +15,20 @@
  */
 package org.teavm.dependency;
 
-import com.carrotsearch.hppc.IntSet;
+import com.carrotsearch.hppc.IntHashSet;
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.Collection;
+import org.teavm.model.ClassReaderSource;
+import org.teavm.model.ValueType;
 
-class DependencyNodeToNodeTransition implements DependencyConsumer {
-    private DependencyNode source;
+class DependencyNodeToNodeTransition  {
+    DependencyNode source;
     DependencyNode destination;
-    private DependencyTypeFilter filter;
+    DependencyTypeFilter filter;
     private BitSet knownFilteredOffTypes;
-    IntSet pendingTypes;
+    IntHashSet pendingTypes;
+    byte destSubsetOfSrc;
 
     DependencyNodeToNodeTransition(DependencyNode source, DependencyNode destination, DependencyTypeFilter filter) {
         this.source = source;
@@ -32,45 +36,106 @@ class DependencyNodeToNodeTransition implements DependencyConsumer {
         this.filter = filter;
     }
 
-    @Override
-    public void consume(DependencyType type) {
-        if (!filterType(type)) {
+    void consume(DependencyType type) {
+        if (!destination.hasType(type) && filterType(type) && destination.filter(type)) {
+            propagate(type);
+        }
+    }
+
+    private void propagate(DependencyType type) {
+        if (destination.typeSet == source.typeSet) {
             return;
         }
-        if (type.getName().startsWith("[")) {
-            source.getArrayItem().connect(destination.getArrayItem());
-            destination.getArrayItem().connect(source.getArrayItem());
-        }
-        if (type.getName().equals("java.lang.Class")) {
-            source.getClassValueNode().connect(destination.getClassValueNode());
-        }
-        if (!destination.hasType(type)) {
+
+        if (shouldMergeDomains()) {
+            mergeDomains(new DependencyType[] { type });
+        } else {
             destination.propagate(type);
         }
+    }
+
+    private void propagate(DependencyType[] types) {
+        if (destination.typeSet == source.typeSet) {
+            return;
+        }
+
+        if (shouldMergeDomains()) {
+            mergeDomains(types);
+        } else {
+            destination.propagate(types);
+        }
+    }
+
+    void mergeDomains(DependencyType[] types) {
+        destination.moveToSeparateDomain();
+        destination.scheduleMultipleTypes(types, () -> {
+            Collection<DependencyNode> domainToMerge = destination.typeSet.domain;
+            for (DependencyNode node : domainToMerge) {
+                node.typeSet = source.typeSet;
+                source.typeSet.domain.add(node);
+            }
+            source.typeSet.invalidate();
+        });
+    }
+
+    boolean shouldMergeDomains() {
+        if (filter != null) {
+            return false;
+        }
+        if (destination.typeSet == null) {
+            return true;
+        }
+        if (destination.typeSet == source.typeSet || destination.typeSet.origin == source
+                || destination.typeSet.typeCount() > source.typeSet.typeCount()) {
+            return false;
+        }
+
+        if (destination.splitCount > 4) {
+            return false;
+        }
+
+        if (destination.typeSet.typeCount() == source.typeSet.typeCount()
+                && destination.typeSet.origin != destination) {
+            return false;
+        }
+
+        for (DependencyType type : destination.getTypesInternal()) {
+            if (!source.hasType(type)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     void consume(DependencyType[] types) {
         int j = 0;
         boolean copied = false;
-        for (DependencyType type : types) {
-            boolean added = false;
-            if (filterType(type)) {
-                if (!destination.hasType(type)) {
+
+        if (filter == null) {
+            for (DependencyType type : types) {
+                boolean added = false;
+                if (!destination.hasType(type) && destination.filter(type)) {
                     types[j++] = type;
                     added = true;
                 }
 
-                if (type.getName().startsWith("[")) {
-                    source.getArrayItem().connect(destination.getArrayItem());
-                    destination.getArrayItem().connect(source.getArrayItem());
-                }
-                if (type.getName().equals("java.lang.Class")) {
-                    source.getClassValueNode().connect(destination.getClassValueNode());
+                if (!added && !copied) {
+                    copied = true;
+                    types = types.clone();
                 }
             }
-            if (!added && !copied) {
-                copied = true;
-                types = types.clone();
+        } else {
+            for (DependencyType type : types) {
+                boolean added = false;
+                if (filterType(type) && !destination.hasType(type) && destination.filter(type)) {
+                    types[j++] = type;
+                    added = true;
+                }
+                if (!added && !copied) {
+                    copied = true;
+                    types = types.clone();
+                }
             }
         }
 
@@ -79,17 +144,21 @@ class DependencyNodeToNodeTransition implements DependencyConsumer {
         }
 
         if (j == 1) {
-            destination.propagate(types[0]);
+            propagate(types[0]);
         } else {
             if (j < types.length) {
                 types = Arrays.copyOf(types, j);
             }
 
-            destination.propagate(types);
+            propagate(types);
         }
     }
 
-    private boolean filterType(DependencyType type) {
+    boolean filterType(DependencyType type) {
+        if (pendingTypes != null && pendingTypes.contains(type.index)) {
+            return false;
+        }
+
         if (filter == null) {
             return true;
         }
@@ -106,5 +175,30 @@ class DependencyNodeToNodeTransition implements DependencyConsumer {
         }
 
         return true;
+    }
+
+    boolean pointsToDomainOrigin() {
+        return destination.typeSet == null || destination.typeSet.origin == destination;
+    }
+
+    boolean isDestSubsetOfSrc() {
+        if (destSubsetOfSrc == 0) {
+            destSubsetOfSrc = calculateDestSubsetOfSrc() ? (byte) 2 : 1;
+        }
+        return destSubsetOfSrc == 2;
+    }
+
+    private boolean calculateDestSubsetOfSrc() {
+        if (source.typeFilter == null) {
+            return true;
+        }
+        if (destination.typeFilter == null) {
+            return false;
+        }
+
+        ValueType sourceType = source.typeFilter;
+        ValueType destType = destination.typeFilter;
+        ClassReaderSource classSource = source.dependencyAnalyzer.getClassSource();
+        return classSource.isSuperType(sourceType, destType).orElse(false);
     }
 }

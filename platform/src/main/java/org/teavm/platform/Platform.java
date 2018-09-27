@@ -37,6 +37,7 @@ public final class Platform {
     private static boolean newInstancePrepared;
 
     @InjectedBy(PlatformGenerator.class)
+    @Unmanaged
     public static native PlatformObject getPlatformObject(Object obj);
 
     @GeneratedBy(PlatformGenerator.class)
@@ -80,6 +81,7 @@ public final class Platform {
 
     @InjectedBy(PlatformGenerator.class)
     @PluggableDependency(PlatformGenerator.class)
+    @Unmanaged
     public static native Class<?> asJavaClass(PlatformObject obj);
 
     public static PlatformConsole getConsole() {
@@ -110,7 +112,15 @@ public final class Platform {
 
     @PluggableDependency(PlatformGenerator.class)
     @InjectedBy(PlatformGenerator.class)
+    @DelegateTo("initClassLowLevel")
     public static native void initClass(PlatformClass cls);
+
+    @Unmanaged
+    private static void initClassLowLevel(RuntimeClass cls) {
+        if (cls.init != null) {
+            cls.init.run();
+        }
+    }
 
     @InjectedBy(PlatformGenerator.class)
     @PluggableDependency(PlatformGenerator.class)
@@ -212,17 +222,12 @@ public final class Platform {
         return (cls.flags & RuntimeClass.ENUM) != 0;
     }
 
-    @DelegateTo("getArrayItemLowLevel")
+    @Unmanaged
     public static PlatformClass getArrayItem(PlatformClass cls) {
         return cls.getMetadata().getArrayItem();
     }
 
-    @SuppressWarnings("unused")
     @Unmanaged
-    private static RuntimeClass getArrayItemLowLevel(RuntimeClass cls) {
-        return cls.itemType;
-    }
-
     public static String getName(PlatformClass cls) {
         return cls.getMetadata().getName();
     }

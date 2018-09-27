@@ -50,6 +50,7 @@ import org.teavm.dependency.DependencyAnalyzer;
 import org.teavm.dependency.DependencyListener;
 import org.teavm.dependency.MethodDependency;
 import org.teavm.interop.PlatformMarker;
+import org.teavm.interop.PlatformMarkers;
 import org.teavm.model.BasicBlock;
 import org.teavm.model.CallLocation;
 import org.teavm.model.ClassHolder;
@@ -230,6 +231,10 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
     }
 
     @Override
+    public void beforeOptimizations(Program program, MethodReader method, ListableClassReaderSource classSource) {
+    }
+
+    @Override
     public void afterOptimizations(Program program, MethodReader method, ListableClassReaderSource classSource) {
         clinitInsertionTransformer.apply(method, program);
     }
@@ -308,7 +313,7 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
         asyncFamilyMethods.addAll(asyncFinder.getAsyncFamilyMethods());
 
         Decompiler decompiler = new Decompiler(classes, controller.getClassLoader(), asyncMethods, asyncFamilyMethods,
-                controller.isFriendlyToDebugger());
+                controller.isFriendlyToDebugger(), false);
         decompiler.setRegularMethodCache(controller.isIncremental() ? astCache : null);
 
         for (Map.Entry<MethodReference, Generator> entry : methodGenerators.entrySet()) {
@@ -447,5 +452,15 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
             return null;
         }
         return new SourceLocation(location.getFileName(), location.getLine());
+    }
+
+    @Override
+    public String[] getPlatformTags() {
+        return new String[] { PlatformMarkers.JAVASCRIPT };
+    }
+
+    @Override
+    public boolean isAsyncSupported() {
+        return true;
     }
 }
