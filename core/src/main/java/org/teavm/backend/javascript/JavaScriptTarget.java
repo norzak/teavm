@@ -15,12 +15,19 @@
  */
 package org.teavm.backend.javascript;
 
+import com.carrotsearch.hppc.ObjectIntHashMap;
+import com.carrotsearch.hppc.ObjectIntMap;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.text.DecimalFormat;
+import java.text.NumberFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -28,8 +35,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import org.teavm.ast.ClassNode;
-import org.teavm.ast.cache.EmptyRegularMethodNodeCache;
-import org.teavm.ast.cache.MethodNodeCache;
 import org.teavm.ast.decompilation.Decompiler;
 import org.teavm.backend.javascript.codegen.AliasProvider;
 import org.teavm.backend.javascript.codegen.DefaultAliasProvider;
@@ -39,15 +44,21 @@ import org.teavm.backend.javascript.codegen.SourceWriter;
 import org.teavm.backend.javascript.codegen.SourceWriterBuilder;
 import org.teavm.backend.javascript.rendering.Renderer;
 import org.teavm.backend.javascript.rendering.RenderingContext;
+import org.teavm.backend.javascript.rendering.RuntimeRenderer;
 import org.teavm.backend.javascript.spi.GeneratedBy;
 import org.teavm.backend.javascript.spi.Generator;
 import org.teavm.backend.javascript.spi.InjectedBy;
 import org.teavm.backend.javascript.spi.Injector;
+import org.teavm.backend.javascript.spi.VirtualMethodContributor;
+import org.teavm.backend.javascript.spi.VirtualMethodContributorContext;
+import org.teavm.cache.EmptyMethodNodeCache;
+import org.teavm.cache.MethodNodeCache;
 import org.teavm.debugging.information.DebugInformationEmitter;
 import org.teavm.debugging.information.DummyDebugInformationEmitter;
 import org.teavm.debugging.information.SourceLocation;
 import org.teavm.dependency.DependencyAnalyzer;
 import org.teavm.dependency.DependencyListener;
+import org.teavm.dependency.DependencyType;
 import org.teavm.dependency.MethodDependency;
 import org.teavm.interop.PlatformMarker;
 import org.teavm.interop.PlatformMarkers;
@@ -57,8 +68,8 @@ import org.teavm.model.ClassHolder;
 import org.teavm.model.ClassHolderTransformer;
 import org.teavm.model.ClassReaderSource;
 import org.teavm.model.ElementModifier;
+import org.teavm.model.FieldReference;
 import org.teavm.model.ListableClassHolderSource;
-import org.teavm.model.ListableClassReaderSource;
 import org.teavm.model.MethodHolder;
 import org.teavm.model.MethodReader;
 import org.teavm.model.MethodReference;
@@ -83,18 +94,24 @@ import org.teavm.vm.spi.RendererListener;
 import org.teavm.vm.spi.TeaVMHostExtension;
 
 public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
+    private static final NumberFormat STATS_NUM_FORMAT = new DecimalFormat("#,##0");
+    private static final NumberFormat STATS_PERCENT_FORMAT = new DecimalFormat("0.000 %");
+
     private TeaVMTargetController controller;
     private boolean minifying = true;
+    private boolean stackTraceIncluded;
     private final Map<MethodReference, Generator> methodGenerators = new HashMap<>();
     private final Map<MethodReference, Injector> methodInjectors = new HashMap<>();
     private final List<Function<ProviderContext, Generator>> generatorProviders = new ArrayList<>();
     private final List<Function<ProviderContext, Injector>> injectorProviders = new ArrayList<>();
     private final List<RendererListener> rendererListeners = new ArrayList<>();
     private DebugInformationEmitter debugEmitter;
-    private MethodNodeCache astCache = new EmptyRegularMethodNodeCache();
+    private MethodNodeCache astCache = EmptyMethodNodeCache.INSTANCE;
     private final Set<MethodReference> asyncMethods = new HashSet<>();
     private final Set<MethodReference> asyncFamilyMethods = new HashSet<>();
     private ClassInitializerInsertionTransformer clinitInsertionTransformer;
+    private List<VirtualMethodContributor> customVirtualMethods = new ArrayList<>();
+    private boolean classScoped;
 
     @Override
     public List<ClassHolderTransformer> getTransformers() {
@@ -173,9 +190,17 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
         this.debugEmitter = debugEmitter;
     }
 
+    public void setClassScoped(boolean classScoped) {
+        this.classScoped = classScoped;
+    }
+
     @Override
     public boolean requiresRegisterAllocation() {
         return true;
+    }
+
+    public void setStackTraceIncluded(boolean stackTraceIncluded) {
+        this.stackTraceIncluded = stackTraceIncluded;
     }
 
     @Override
@@ -185,45 +210,81 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
 
     @Override
     public void contributeDependencies(DependencyAnalyzer dependencyAnalyzer) {
-        dependencyAnalyzer.linkMethod(new MethodReference(Class.class.getName(), "getClass",
-                ValueType.object("org.teavm.platform.PlatformClass"), ValueType.parse(Class.class)), null).use();
-        dependencyAnalyzer.linkMethod(new MethodReference(String.class, "<init>", char[].class, void.class),
-                null).use();
-        dependencyAnalyzer.linkMethod(new MethodReference(String.class, "getChars", int.class, int.class, char[].class,
-                int.class, void.class), null).use();
+        MethodDependency dep;
 
-        MethodDependency internDep = dependencyAnalyzer.linkMethod(new MethodReference(String.class, "intern",
-                String.class), null);
-        internDep.getVariable(0).propagate(dependencyAnalyzer.getType("java.lang.String"));
-        internDep.use();
+        DependencyType stringType = dependencyAnalyzer.getType("java.lang.String");
 
-        dependencyAnalyzer.linkMethod(new MethodReference(String.class, "length", int.class), null).use();
-        dependencyAnalyzer.linkMethod(new MethodReference(Object.class, "clone", Object.class), null).use();
-        dependencyAnalyzer.linkMethod(new MethodReference(Thread.class, "currentThread", Thread.class), null).use();
-        dependencyAnalyzer.linkMethod(new MethodReference(Thread.class, "getMainThread", Thread.class), null).use();
-        dependencyAnalyzer.linkMethod(
-                new MethodReference(Thread.class, "setCurrentThread", Thread.class, void.class), null).use();
+        dep = dependencyAnalyzer.linkMethod(new MethodReference(Class.class.getName(), "getClass",
+                ValueType.object("org.teavm.platform.PlatformClass"), ValueType.parse(Class.class)));
+        dep.getVariable(0).propagate(dependencyAnalyzer.getType("org.teavm.platform.PlatformClass"));
+        dep.getResult().propagate(dependencyAnalyzer.getType("java.lang.Class"));
+        dep.use();
+
+        dep = dependencyAnalyzer.linkMethod(new MethodReference(String.class, "<init>", char[].class, void.class));
+        dep.getVariable(0).propagate(stringType);
+        dep.getVariable(1).propagate(dependencyAnalyzer.getType("[C"));
+        dep.use();
+
+        dependencyAnalyzer.linkField(new FieldReference(String.class.getName(), "characters"));
+
+        dependencyAnalyzer.linkMethod(new MethodReference(Object.class, "clone", Object.class));
         MethodDependency exceptionCons = dependencyAnalyzer.linkMethod(new MethodReference(
-                NoClassDefFoundError.class, "<init>", String.class, void.class), null);
+                NoClassDefFoundError.class, "<init>", String.class, void.class));
+
+        dep = dependencyAnalyzer.linkMethod(new MethodReference(Object.class, "toString", String.class));
+        dep.getVariable(0).propagate(dependencyAnalyzer.getType("java.lang.Object"));
+        dep.use();
 
         exceptionCons.getVariable(0).propagate(dependencyAnalyzer.getType(NoClassDefFoundError.class.getName()));
-        exceptionCons.getVariable(1).propagate(dependencyAnalyzer.getType("java.lang.String"));
+        exceptionCons.getVariable(1).propagate(stringType);
         exceptionCons = dependencyAnalyzer.linkMethod(new MethodReference(NoSuchFieldError.class, "<init>",
-                String.class, void.class), null);
+                String.class, void.class));
         exceptionCons.use();
         exceptionCons.getVariable(0).propagate(dependencyAnalyzer.getType(NoSuchFieldError.class.getName()));
-        exceptionCons.getVariable(1).propagate(dependencyAnalyzer.getType("java.lang.String"));
+        exceptionCons.getVariable(1).propagate(stringType);
         exceptionCons = dependencyAnalyzer.linkMethod(new MethodReference(NoSuchMethodError.class, "<init>",
-                String.class, void.class), null);
+                String.class, void.class));
         exceptionCons.use();
         exceptionCons.getVariable(0).propagate(dependencyAnalyzer.getType(NoSuchMethodError.class.getName()));
-        exceptionCons.getVariable(1).propagate(dependencyAnalyzer.getType("java.lang.String"));
+        exceptionCons.getVariable(1).propagate(stringType);
+
+        exceptionCons = dependencyAnalyzer.linkMethod(new MethodReference(
+                RuntimeException.class, "<init>", String.class, void.class));
+        exceptionCons.getVariable(0).propagate(dependencyAnalyzer.getType(RuntimeException.class.getName()));
+        exceptionCons.getVariable(1).propagate(stringType);
+        exceptionCons.use();
+
+        if (stackTraceIncluded) {
+            includeStackTraceMethods(dependencyAnalyzer);
+        }
+    }
+
+    public static void includeStackTraceMethods(DependencyAnalyzer dependencyAnalyzer) {
+        MethodDependency dep;
+
+        DependencyType stringType = dependencyAnalyzer.getType("java.lang.String");
+
+        dep = dependencyAnalyzer.linkMethod(new MethodReference(
+                StackTraceElement.class, "<init>", String.class, String.class, String.class,
+                int.class, void.class));
+        dep.getVariable(0).propagate(dependencyAnalyzer.getType(StackTraceElement.class.getName()));
+        dep.getVariable(1).propagate(stringType);
+        dep.getVariable(2).propagate(stringType);
+        dep.getVariable(3).propagate(stringType);
+        dep.use();
+
+        dep = dependencyAnalyzer.linkMethod(new MethodReference(
+                Throwable.class, "setStackTrace", StackTraceElement[].class, void.class));
+        dep.getVariable(0).propagate(dependencyAnalyzer.getType(Throwable.class.getName()));
+        dep.getVariable(1).propagate(dependencyAnalyzer.getType("[Ljava/lang/StackTraceElement;"));
+        dep.getVariable(1).getArrayItem().propagate(dependencyAnalyzer.getType(StackTraceElement.class.getName()));
+        dep.use();
     }
 
     @Override
     public void emit(ListableClassHolderSource classes, BuildTarget target, String outputName) {
         try (OutputStream output = target.createResource(outputName);
-                Writer writer = new OutputStreamWriter(output, "UTF-8")) {
+                Writer writer = new OutputStreamWriter(output, StandardCharsets.UTF_8)) {
             emit(classes, writer, target);
         } catch (IOException e) {
             throw new RenderingException(e);
@@ -231,11 +292,11 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
     }
 
     @Override
-    public void beforeOptimizations(Program program, MethodReader method, ListableClassReaderSource classSource) {
+    public void beforeOptimizations(Program program, MethodReader method) {
     }
 
     @Override
-    public void afterOptimizations(Program program, MethodReader method, ListableClassReaderSource classSource) {
+    public void afterOptimizations(Program program, MethodReader method) {
         clinitInsertionTransformer.apply(method, program);
     }
 
@@ -249,20 +310,26 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
         DefaultNamingStrategy naming = new DefaultNamingStrategy(aliasProvider, controller.getUnprocessedClassSource());
         SourceWriterBuilder builder = new SourceWriterBuilder(naming);
         builder.setMinified(minifying);
+        builder.setClassScoped(classScoped);
         SourceWriter sourceWriter = builder.build(writer);
 
         DebugInformationEmitter debugEmitterToUse = debugEmitter;
         if (debugEmitterToUse == null) {
             debugEmitterToUse = new DummyDebugInformationEmitter();
         }
+        VirtualMethodContributorContext virtualMethodContributorContext = new VirtualMethodContributorContextImpl(
+                classes);
         RenderingContext renderingContext = new RenderingContext(debugEmitterToUse,
                 controller.getUnprocessedClassSource(), classes,
-                controller.getClassLoader(), controller.getServices(), controller.getProperties(), naming);
+                controller.getClassLoader(), controller.getServices(), controller.getProperties(), naming,
+                controller.getDependencyInfo(), m -> isVirtual(virtualMethodContributorContext, m));
         renderingContext.setMinifying(minifying);
         Renderer renderer = new Renderer(sourceWriter, asyncMethods, asyncFamilyMethods,
-                controller.getDiagnostics(), renderingContext);
+                controller.getDiagnostics(), renderingContext, classScoped);
+        RuntimeRenderer runtimeRenderer = new RuntimeRenderer(classes, naming, sourceWriter);
         renderer.setProperties(controller.getProperties());
         renderer.setMinifying(minifying);
+        renderer.setProgressConsumer(controller::reportProgress);
         if (debugEmitter != null) {
             for (String className : classes.getClassNames()) {
                 ClassHolder cls = classes.get(className);
@@ -282,27 +349,95 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
             renderingContext.addInjector(entry.getKey(), entry.getValue());
         }
         try {
+            printWrapperStart(sourceWriter);
+
             for (RendererListener listener : rendererListeners) {
                 listener.begin(renderer, target);
             }
-            sourceWriter.append("\"use strict\";").newLine();
-            renderer.renderRuntime();
-            renderer.render(clsNodes);
+            int start = sourceWriter.getOffset();
+
+            renderer.prepare(clsNodes);
+            runtimeRenderer.renderRuntime();
+            if (!renderer.render(clsNodes)) {
+                return;
+            }
             renderer.renderStringPool();
             renderer.renderStringConstants();
+            renderer.renderCompatibilityStubs();
+
+            if (renderer.isLongLibraryUsed()) {
+                runtimeRenderer.renderHandWrittenRuntime("long.js");
+            }
+            if (renderer.isThreadLibraryUsed()) {
+                runtimeRenderer.renderHandWrittenRuntime("thread.js");
+            } else {
+                runtimeRenderer.renderHandWrittenRuntime("simpleThread.js");
+            }
+
             for (Map.Entry<? extends String, ? extends TeaVMEntryPoint> entry
                     : controller.getEntryPoints().entrySet()) {
-                sourceWriter.append("var ").append(entry.getKey()).ws().append("=").ws();
-                MethodReference ref = entry.getValue().getReference();
-                sourceWriter.append(naming.getFullNameFor(ref));
-                sourceWriter.append(";").newLine();
+                sourceWriter.append("").append(entry.getKey()).ws().append("=").ws();
+                MethodReference ref = entry.getValue().getMethod();
+                sourceWriter.append("$rt_mainStarter(").appendMethodBody(ref);
+                sourceWriter.append(");").newLine();
             }
+
             for (RendererListener listener : rendererListeners) {
                 listener.complete();
             }
+
+            printWrapperEnd(sourceWriter);
+
+            int totalSize = sourceWriter.getOffset() - start;
+            printStats(renderer, totalSize);
         } catch (IOException e) {
             throw new RenderingException("IO Error occured", e);
         }
+    }
+
+    private void printWrapperStart(SourceWriter writer) throws IOException {
+        writer.append("\"use strict\";").newLine();
+        for (String key : controller.getEntryPoints().keySet()) {
+            writer.append("var ").append(key).append(";").softNewLine();
+        }
+        writer.append("(function()").ws().append("{").newLine();
+    }
+
+    private void printWrapperEnd(SourceWriter writer) throws IOException {
+        writer.append("})();").newLine();
+    }
+
+    private void printStats(Renderer renderer, int totalSize) {
+        if (!Boolean.parseBoolean(System.getProperty("teavm.js.stats", "false"))) {
+            return;
+        }
+
+        System.out.println("Total output size: " + STATS_NUM_FORMAT.format(totalSize));
+        System.out.println("Metadata size: " + getSizeWithPercentage(renderer.getMetadataSize(), totalSize));
+        System.out.println("String pool size: " + getSizeWithPercentage(renderer.getStringPoolSize(), totalSize));
+
+        ObjectIntMap<String> packageSizeMap = new ObjectIntHashMap<>();
+        for (String className : renderer.getClassesInStats()) {
+            String packageName = className.substring(0, className.lastIndexOf('.') + 1);
+            int classSize = renderer.getClassSize(className);
+            packageSizeMap.put(packageName, packageSizeMap.getOrDefault(packageName, 0) + classSize);
+        }
+
+        String[] packageNames = packageSizeMap.keys().toArray(String.class);
+        Arrays.sort(packageNames, Comparator.comparing(p -> -packageSizeMap.getOrDefault(p, 0)));
+        for (String packageName : packageNames) {
+            System.out.println("Package '" + packageName + "' size: "
+                    + getSizeWithPercentage(packageSizeMap.get(packageName), totalSize));
+        }
+    }
+
+    private String getSizeWithPercentage(int size, int totalSize) {
+        return STATS_NUM_FORMAT.format(size) + " (" + STATS_PERCENT_FORMAT.format((double) size / totalSize) + ")";
+    }
+
+    static class PackageNode {
+        String name;
+        Map<String, PackageNode> children = new HashMap<>();
     }
 
     private List<ClassNode> modelToAst(ListableClassHolderSource classes) {
@@ -312,9 +447,9 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
         asyncMethods.addAll(asyncFinder.getAsyncMethods());
         asyncFamilyMethods.addAll(asyncFinder.getAsyncFamilyMethods());
 
-        Decompiler decompiler = new Decompiler(classes, controller.getClassLoader(), asyncMethods, asyncFamilyMethods,
-                controller.isFriendlyToDebugger(), false);
-        decompiler.setRegularMethodCache(controller.isIncremental() ? astCache : null);
+        Decompiler decompiler = new Decompiler(classes, controller.getClassLoader(), controller.getCacheStatus(),
+                asyncMethods, asyncFamilyMethods, controller.isFriendlyToDebugger(), false);
+        decompiler.setRegularMethodCache(astCache);
 
         for (Map.Entry<MethodReference, Generator> entry : methodGenerators.entrySet()) {
             decompiler.addGenerator(entry.getKey(), entry.getValue());
@@ -401,7 +536,7 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
         initExceptionInsn.setInstance(exceptionVar);
         initExceptionInsn.setMethod(new MethodReference(NoSuchMethodError.class, "<init>", String.class, void.class));
         initExceptionInsn.setType(InvocationType.SPECIAL);
-        initExceptionInsn.getArguments().add(constVar);
+        initExceptionInsn.setArguments(constVar);
         block.add(initExceptionInsn);
 
         RaiseInstruction raiseInsn = new RaiseInstruction();
@@ -460,7 +595,37 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
     }
 
     @Override
+    public void addVirtualMethods(VirtualMethodContributor virtualMethods) {
+        customVirtualMethods.add(virtualMethods);
+    }
+
+    @Override
     public boolean isAsyncSupported() {
         return true;
+    }
+
+    private boolean isVirtual(VirtualMethodContributorContext context, MethodReference method) {
+        if (controller.isVirtual(method)) {
+            return true;
+        }
+        for (VirtualMethodContributor predicate : customVirtualMethods) {
+            if (predicate.isVirtual(context, method)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static class VirtualMethodContributorContextImpl implements VirtualMethodContributorContext {
+        private ClassReaderSource classSource;
+
+        VirtualMethodContributorContextImpl(ClassReaderSource classSource) {
+            this.classSource = classSource;
+        }
+
+        @Override
+        public ClassReaderSource getClassSource() {
+            return classSource;
+        }
     }
 }

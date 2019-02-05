@@ -46,10 +46,8 @@ public class JCLPlugin implements TeaVMPlugin {
             TeaVMJavaScriptHost jsExtension = host.getExtension(TeaVMJavaScriptHost.class);
             if (jsExtension != null) {
                 jsExtension.add(loadServicesMethod, serviceLoaderSupp);
+                jsExtension.addVirtualMethods(new AnnotationVirtualMethods());
             }
-
-            JavacSupport javacSupport = new JavacSupport();
-            host.add(javacSupport);
         }
 
         if (!isBootstrap()) {
@@ -72,11 +70,24 @@ public class JCLPlugin implements TeaVMPlugin {
                 ValueType.arrayOf(ValueType.object("java.lang.Object")),
                 ValueType.object("java.lang.invoke.CallSite")), lms);
 
+        StringConcatFactorySubstitutor stringConcatSubstitutor = new StringConcatFactorySubstitutor();
+        host.add(new MethodReference("java.lang.invoke.StringConcatFactory", "makeConcat",
+                ValueType.object("java.lang.invoke.MethodHandles$Lookup"), ValueType.object("java.lang.String"),
+                ValueType.object("java.lang.invoke.MethodType"), ValueType.object("java.lang.invoke.CallSite")),
+                stringConcatSubstitutor);
+        host.add(new MethodReference("java.lang.invoke.StringConcatFactory", "makeConcatWithConstants",
+                        ValueType.object("java.lang.invoke.MethodHandles$Lookup"), ValueType.object("java.lang.String"),
+                        ValueType.object("java.lang.invoke.MethodType"), ValueType.object("java.lang.String"),
+                        ValueType.arrayOf(ValueType.object("java.lang.Object")),
+                        ValueType.object("java.lang.invoke.CallSite")),
+                stringConcatSubstitutor);
+
         if (!isBootstrap()) {
             host.add(new ScalaHacks());
         }
 
         host.add(new NumericClassTransformer());
+        host.add(new SystemClassTransformer());
 
         if (!isBootstrap()) {
             List<ReflectionSupplier> reflectionSuppliers = new ArrayList<>();

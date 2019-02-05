@@ -30,11 +30,14 @@ public class SourceWriter implements Appendable, LocationProvider {
     private final int lineWidth;
     private int column;
     private int line;
+    private int offset;
+    private boolean classScoped;
 
-    SourceWriter(NamingStrategy naming, Appendable innerWriter, int lineWidth) {
+    SourceWriter(NamingStrategy naming, Appendable innerWriter, int lineWidth, boolean classScoped) {
         this.naming = naming;
         this.innerWriter = innerWriter;
         this.lineWidth = lineWidth;
+        this.classScoped = classScoped;
     }
 
     void setMinified(boolean minified) {
@@ -62,6 +65,7 @@ public class SourceWriter implements Appendable, LocationProvider {
             newLine();
         } else {
             column++;
+            offset++;
         }
         return this;
     }
@@ -92,53 +96,66 @@ public class SourceWriter implements Appendable, LocationProvider {
         }
         appendIndent();
         column += end - start;
+        offset += end - start;
         innerWriter.append(csq, start, end);
     }
 
-    public SourceWriter appendClass(String cls) throws NamingException, IOException {
+    public SourceWriter appendClass(String cls) throws IOException {
         return append(naming.getNameFor(cls));
     }
 
-    public SourceWriter appendClass(Class<?> cls) throws NamingException, IOException {
+    public SourceWriter appendClass(Class<?> cls) throws IOException {
         return append(naming.getNameFor(cls.getName()));
     }
 
-    public SourceWriter appendField(FieldReference field) throws NamingException, IOException {
+    public SourceWriter appendField(FieldReference field) throws IOException {
         return append(naming.getNameFor(field));
     }
 
-    public SourceWriter appendStaticField(FieldReference field) throws NamingException, IOException {
+    public SourceWriter appendStaticField(FieldReference field) throws IOException {
+        appendClassScopeIfNecessary(field.getClassName());
         return append(naming.getFullNameFor(field));
     }
 
-    public SourceWriter appendMethod(MethodDescriptor method) throws NamingException, IOException {
+    public SourceWriter appendMethod(MethodDescriptor method) throws IOException {
         return append(naming.getNameFor(method));
     }
 
-    public SourceWriter appendMethod(String name, ValueType... params) throws NamingException, IOException {
+    public SourceWriter appendMethod(String name, Class<?>... params) throws IOException {
         return append(naming.getNameFor(new MethodDescriptor(name, params)));
     }
 
-    public SourceWriter appendMethod(String name, Class<?>... params) throws NamingException, IOException {
-        return append(naming.getNameFor(new MethodDescriptor(name, params)));
-    }
-
-    public SourceWriter appendMethodBody(MethodReference method) throws NamingException, IOException {
+    public SourceWriter appendMethodBody(MethodReference method) throws IOException {
+        appendClassScopeIfNecessary(method.getClassName());
         return append(naming.getFullNameFor(method));
     }
 
-    public SourceWriter appendMethodBody(String className, String name, ValueType... params)
-            throws NamingException, IOException {
-        return append(naming.getFullNameFor(new MethodReference(className, new MethodDescriptor(name, params))));
+    public SourceWriter appendMethodBody(String className, String name, ValueType... params) throws IOException {
+        return appendMethodBody(new MethodReference(className, new MethodDescriptor(name, params)));
     }
 
-    public SourceWriter appendMethodBody(Class<?> cls, String name, Class<?>... params)
-            throws NamingException, IOException {
-        return append(naming.getFullNameFor(new MethodReference(cls, name, params)));
+    public SourceWriter appendMethodBody(Class<?> cls, String name, Class<?>... params) throws IOException {
+        return appendMethodBody(new MethodReference(cls, name, params));
     }
 
-    public SourceWriter appendFunction(String name) throws NamingException, IOException {
+    public SourceWriter appendFunction(String name) throws IOException {
         return append(naming.getNameForFunction(name));
+    }
+
+    public SourceWriter appendInit(MethodReference method) throws IOException {
+        appendClassScopeIfNecessary(method.getClassName());
+        return append(naming.getNameForInit(method));
+    }
+
+    public SourceWriter appendClassInit(String className) throws IOException {
+        appendClassScopeIfNecessary(className);
+        return append(naming.getNameForClassInit(className));
+    }
+
+    private void appendClassScopeIfNecessary(String className) throws IOException {
+        if (classScoped) {
+            append(naming.getNameFor(className)).append(".");
+        }
     }
 
     private void appendIndent() throws IOException {
@@ -149,6 +166,7 @@ public class SourceWriter implements Appendable, LocationProvider {
             for (int i = 0; i < indentSize; ++i) {
                 innerWriter.append("    ");
                 column += 4;
+                offset += 4;
             }
             lineStart = false;
         }
@@ -158,6 +176,7 @@ public class SourceWriter implements Appendable, LocationProvider {
         innerWriter.append('\n');
         column = 0;
         ++line;
+        ++offset;
         lineStart = true;
         return this;
     }
@@ -169,6 +188,7 @@ public class SourceWriter implements Appendable, LocationProvider {
             if (!minified) {
                 innerWriter.append(' ');
                 column++;
+                offset++;
             }
         }
         return this;
@@ -185,6 +205,7 @@ public class SourceWriter implements Appendable, LocationProvider {
         if (!minified) {
             innerWriter.append('\n');
             column = 0;
+            ++offset;
             ++line;
             lineStart = true;
         }
@@ -213,5 +234,10 @@ public class SourceWriter implements Appendable, LocationProvider {
     @Override
     public int getLine() {
         return line;
+    }
+
+    @Override
+    public int getOffset() {
+        return offset;
     }
 }

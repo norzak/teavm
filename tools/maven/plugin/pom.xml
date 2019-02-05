@@ -58,14 +58,6 @@
       <artifactId>commons-io</artifactId>
     </dependency>
     <dependency>
-      <groupId>org.seleniumhq.selenium</groupId>
-      <artifactId>selenium-java</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.seleniumhq.selenium</groupId>
-      <artifactId>selenium-remote-driver</artifactId>
-    </dependency>
-    <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
     </dependency>
@@ -85,7 +77,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-plugin-plugin</artifactId>
-        <version>3.5.1</version>
+        <version>3.6.0</version>
         <configuration>
           <skipErrorNoDescriptorsFound>true</skipErrorNoDescriptorsFound>
           <goalPrefix>teavm</goalPrefix>

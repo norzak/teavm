@@ -28,7 +28,6 @@ import org.teavm.classlib.impl.ReflectionDependencyListener;
 import org.teavm.dependency.DependencyAgent;
 import org.teavm.dependency.DependencyPlugin;
 import org.teavm.dependency.MethodDependency;
-import org.teavm.model.CallLocation;
 import org.teavm.model.ClassReader;
 import org.teavm.model.ElementModifier;
 import org.teavm.model.FieldReader;
@@ -65,7 +64,7 @@ public class ClassGenerator implements Generator, Injector, DependencyPlugin {
     }
 
     @Override
-    public void methodReached(DependencyAgent agent, MethodDependency method, CallLocation location) {
+    public void methodReached(DependencyAgent agent, MethodDependency method) {
         switch (method.getReference().getName()) {
             case "newEmptyInstance":
                 method.getVariable(0).getClassValueNode().connect(method.getResult());
@@ -267,17 +266,19 @@ public class ClassGenerator implements Generator, Injector, DependencyPlugin {
         if (method.getResultType() != ValueType.VOID) {
             writer.append("return ");
         }
-        if (method.hasModifier(ElementModifier.STATIC)) {
-            writer.appendMethodBody(method.getReference());
-        } else {
-            writer.append("obj.").appendMethod(method.getDescriptor());
-        }
+        writer.appendMethodBody(method.getReference());
 
         writer.append('(');
+        boolean first = true;
+        if (!method.hasModifier(ElementModifier.STATIC)) {
+            writer.append("obj").ws();
+            first = false;
+        }
         for (int i = 0; i < method.parameterCount(); ++i) {
-            if (i > 0) {
+            if (!first) {
                 writer.append(',').ws();
             }
+            first = false;
             int index = i;
             unboxIfNecessary(writer, method.parameterType(i), () -> writer.append("args[" + index + "]"));
         }
@@ -291,7 +292,7 @@ public class ClassGenerator implements Generator, Injector, DependencyPlugin {
 
     private void initClass(SourceWriter writer, MemberReader member) throws IOException {
         if (member.hasModifier(ElementModifier.STATIC)) {
-            writer.appendClass(member.getOwnerName()).append("_$callClinit();").softNewLine();
+            writer.appendClassInit(member.getOwnerName()).append("();").softNewLine();
         }
     }
 

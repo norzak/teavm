@@ -27,17 +27,19 @@ import org.teavm.model.optimization.UnreachableBasicBlockEliminator;
 
 public class MissingItemsProcessor {
     private DependencyInfo dependencyInfo;
+    private ClassHierarchy hierarchy;
     private Diagnostics diagnostics;
     private List<Instruction> instructionsToAdd = new ArrayList<>();
-    private MethodHolder methodHolder;
+    private MethodReference methodRef;
     private Program program;
     private Collection<String> reachableClasses;
     private Collection<MethodReference> reachableMethods;
     private Collection<FieldReference> reachableFields;
 
-    public MissingItemsProcessor(DependencyInfo dependencyInfo, Diagnostics diagnostics) {
+    public MissingItemsProcessor(DependencyInfo dependencyInfo, ClassHierarchy hierarchy, Diagnostics diagnostics) {
         this.dependencyInfo = dependencyInfo;
         this.diagnostics = diagnostics;
+        this.hierarchy = hierarchy;
         reachableClasses = dependencyInfo.getReachableClasses();
         reachableMethods = dependencyInfo.getReachableMethods();
         reachableFields = dependencyInfo.getReachableFields();
@@ -52,8 +54,12 @@ public class MissingItemsProcessor {
     }
 
     public void processMethod(MethodHolder method) {
-        this.methodHolder = method;
-        this.program = method.getProgram();
+        processMethod(method.getReference(), method.getProgram());
+    }
+
+    public void processMethod(MethodReference method, Program program) {
+        this.methodRef = method;
+        this.program = program;
         boolean wasModified = false;
         for (int i = 0; i < program.basicBlockCount(); ++i) {
             BasicBlock block = program.basicBlockAt(i);
@@ -115,7 +121,7 @@ public class MissingItemsProcessor {
         initExceptionInsn.setMethod(new MethodReference(exceptionName, "<init>", ValueType.object("java.lang.String"),
                 ValueType.VOID));
         initExceptionInsn.setType(InvocationType.SPECIAL);
-        initExceptionInsn.getArguments().add(constVar);
+        initExceptionInsn.setArguments(constVar);
         initExceptionInsn.setLocation(location);
         instructionsToAdd.add(initExceptionInsn);
 
@@ -129,7 +135,7 @@ public class MissingItemsProcessor {
         if (!reachableClasses.contains(className) || !dependencyInfo.getClass(className).isMissing()) {
             return true;
         }
-        diagnostics.error(new CallLocation(methodHolder.getReference(), location), "Class {{c0}} was not found",
+        diagnostics.error(new CallLocation(methodRef, location), "Class {{c0}} was not found",
                 className);
         emitExceptionThrow(location, NoClassDefFoundError.class.getName(), "Class not found: " + className);
         return false;
@@ -157,7 +163,7 @@ public class MissingItemsProcessor {
             return true;
         }
 
-        diagnostics.error(new CallLocation(methodHolder.getReference(), location), "Method {{m0}} was not found",
+        diagnostics.error(new CallLocation(methodRef, location), "Method {{m0}} was not found",
                 method);
         emitExceptionThrow(location, NoSuchMethodError.class.getName(), "Method not found: " + method);
         return true;
@@ -171,11 +177,11 @@ public class MissingItemsProcessor {
             return true;
         }
 
-        if (dependencyInfo.getClassSource().resolve(method) != null) {
+        if (hierarchy.resolve(method) != null) {
             return true;
         }
 
-        diagnostics.error(new CallLocation(methodHolder.getReference(), location), "Method {{m0}} was not found",
+        diagnostics.error(new CallLocation(methodRef, location), "Method {{m0}} was not found",
                 method);
         emitExceptionThrow(location, NoSuchMethodError.class.getName(), "Method not found: " + method);
         return true;
@@ -188,17 +194,13 @@ public class MissingItemsProcessor {
         if (!reachableFields.contains(field) || !dependencyInfo.getField(field).isMissing()) {
             return true;
         }
-        diagnostics.error(new CallLocation(methodHolder.getReference(), location), "Field {{f0}} was not found",
+        diagnostics.error(new CallLocation(methodRef, location), "Field {{f0}} was not found",
                 field);
         emitExceptionThrow(location, NoSuchFieldError.class.getName(), "Field not found: " + field);
         return true;
     }
 
-    private InstructionVisitor instructionProcessor = new InstructionVisitor() {
-        @Override
-        public void visit(NullCheckInstruction insn) {
-        }
-
+    private InstructionVisitor instructionProcessor = new AbstractInstructionVisitor() {
         @Override
         public void visit(InitClassInstruction insn) {
             checkClass(insn.getLocation(), insn.getClassName());
@@ -216,30 +218,6 @@ public class MissingItemsProcessor {
             } else {
                 checkVirtualMethod(insn.getLocation(), insn.getMethod());
             }
-        }
-
-        @Override
-        public void visit(InvokeDynamicInstruction insn) {
-        }
-
-        @Override
-        public void visit(PutElementInstruction insn) {
-        }
-
-        @Override
-        public void visit(GetElementInstruction insn) {
-        }
-
-        @Override
-        public void visit(UnwrapArrayInstruction insn) {
-        }
-
-        @Override
-        public void visit(CloneArrayInstruction insn) {
-        }
-
-        @Override
-        public void visit(ArrayLengthInstruction insn) {
         }
 
         @Override
@@ -268,93 +246,13 @@ public class MissingItemsProcessor {
         }
 
         @Override
-        public void visit(RaiseInstruction insn) {
-        }
-
-        @Override
-        public void visit(ExitInstruction insn) {
-        }
-
-        @Override
-        public void visit(SwitchInstruction insn) {
-        }
-
-        @Override
-        public void visit(JumpInstruction insn) {
-        }
-
-        @Override
-        public void visit(BinaryBranchingInstruction insn) {
-        }
-
-        @Override
-        public void visit(BranchingInstruction insn) {
-        }
-
-        @Override
-        public void visit(CastIntegerInstruction insn) {
-        }
-
-        @Override
-        public void visit(CastNumberInstruction insn) {
-        }
-
-        @Override
         public void visit(CastInstruction insn) {
             checkClass(insn.getLocation(), insn.getTargetType());
         }
 
         @Override
-        public void visit(AssignInstruction insn) {
-        }
-
-        @Override
-        public void visit(NegateInstruction insn) {
-        }
-
-        @Override
-        public void visit(BinaryInstruction insn) {
-        }
-
-        @Override
-        public void visit(StringConstantInstruction insn) {
-        }
-
-        @Override
-        public void visit(DoubleConstantInstruction insn) {
-        }
-
-        @Override
-        public void visit(FloatConstantInstruction insn) {
-        }
-
-        @Override
-        public void visit(LongConstantInstruction insn) {
-        }
-
-        @Override
-        public void visit(IntegerConstantInstruction insn) {
-        }
-
-        @Override
-        public void visit(NullConstantInstruction insn) {
-        }
-
-        @Override
         public void visit(ClassConstantInstruction insn) {
             checkClass(insn.getLocation(), insn.getConstant());
-        }
-
-        @Override
-        public void visit(EmptyInstruction insn) {
-        }
-
-        @Override
-        public void visit(MonitorEnterInstruction insn) {
-        }
-
-        @Override
-        public void visit(MonitorExitInstruction insn) {
         }
     };
 }

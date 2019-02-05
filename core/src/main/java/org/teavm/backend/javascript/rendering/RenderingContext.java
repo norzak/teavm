@@ -25,11 +25,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.function.Predicate;
 import org.teavm.backend.javascript.codegen.NamingStrategy;
 import org.teavm.backend.javascript.spi.InjectedBy;
 import org.teavm.backend.javascript.spi.Injector;
 import org.teavm.common.ServiceRepository;
 import org.teavm.debugging.information.DebugInformationEmitter;
+import org.teavm.dependency.DependencyInfo;
 import org.teavm.interop.PlatformMarker;
 import org.teavm.model.AnnotationReader;
 import org.teavm.model.ClassReader;
@@ -48,6 +50,8 @@ public class RenderingContext {
     private ServiceRepository services;
     private Properties properties;
     private NamingStrategy naming;
+    private DependencyInfo dependencyInfo;
+    private Predicate<MethodReference> virtualPredicate;
     private final Deque<LocationStackEntry> locationStack = new ArrayDeque<>();
     private final Map<String, Integer> stringPoolMap = new HashMap<>();
     private final List<String> stringPool = new ArrayList<>();
@@ -58,7 +62,8 @@ public class RenderingContext {
     public RenderingContext(DebugInformationEmitter debugEmitter,
             ClassReaderSource initialClassSource, ListableClassReaderSource classSource,
             ClassLoader classLoader, ServiceRepository services, Properties properties,
-            NamingStrategy naming) {
+            NamingStrategy naming, DependencyInfo dependencyInfo,
+            Predicate<MethodReference> virtualPredicate) {
         this.debugEmitter = debugEmitter;
         this.initialClassSource = initialClassSource;
         this.classSource = classSource;
@@ -66,6 +71,8 @@ public class RenderingContext {
         this.services = services;
         this.properties = properties;
         this.naming = naming;
+        this.dependencyInfo = dependencyInfo;
+        this.virtualPredicate = virtualPredicate;
     }
 
     public ClassReaderSource getInitialClassSource() {
@@ -92,12 +99,20 @@ public class RenderingContext {
         return naming;
     }
 
+    public DependencyInfo getDependencyInfo() {
+        return dependencyInfo;
+    }
+
     public void setMinifying(boolean minifying) {
         this.minifying = minifying;
     }
 
     public DebugInformationEmitter getDebugEmitter() {
         return debugEmitter;
+    }
+
+    public boolean isVirtual(MethodReference method) {
+        return virtualPredicate.test(method);
     }
 
     public void pushLocation(TextLocation location) {

@@ -19,28 +19,23 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class ReferenceCache {
-    private Map<MethodReference, MethodReference> referenceCache = new HashMap<>();
+    private Map<String, Map<MethodDescriptor, MethodReference>> referenceCache = new HashMap<>();
     private Map<FieldReference, FieldReference> fieldRefenceCache = new HashMap<>();
     private Map<MethodDescriptor, MethodDescriptor> descriptorCache = new HashMap<>();
     private Map<ValueType, ValueType> valueTypeCache = new HashMap<>();
-    private Map<String, String> classCache = new HashMap<>();
+    private Map<String, String> stringCache = new HashMap<>();
     private Map<String, MethodReference> referenceParseCache = new HashMap<>();
     private Map<String, MethodDescriptor> descriptorParseCache = new HashMap<>();
     private Map<String, ValueType> valueTypeParseCache = new HashMap<>();
 
     public MethodReference getCached(MethodReference reference) {
-        MethodReference result = referenceCache.get(reference);
-        if (result == null) {
-            MethodDescriptor descriptor = getCached(reference.getDescriptor());
-            String className = getCached(reference.getClassName());
-            if (descriptor != reference.getDescriptor() || className != reference.getClassName()) {
-                result = new MethodReference(className, descriptor);
-            } else {
-                result = reference;
-            }
-            referenceCache.put(result, result);
-        }
-        return result;
+        return getCached(reference.getClassName(), reference.getDescriptor());
+    }
+
+    public MethodReference getCached(String className, MethodDescriptor descriptor) {
+        return referenceCache
+                .computeIfAbsent(className, key -> new HashMap<>())
+                .computeIfAbsent(descriptor, key -> new MethodReference(className, descriptor));
     }
 
     public MethodDescriptor getCached(MethodDescriptor descriptor) {
@@ -108,20 +103,11 @@ public class ReferenceCache {
         return result;
     }
 
-    public String getCached(String className) {
-        String result = classCache.get(className);
+    public String getCached(String s) {
+        String result = stringCache.get(s);
         if (result == null) {
-            result = className;
-            classCache.put(result, result);
-        }
-        return result;
-    }
-
-    public MethodReference parseReferenceCached(String value) {
-        MethodReference result = referenceParseCache.get(value);
-        if (result == null) {
-            result = getCached(MethodReference.parse(value));
-            referenceParseCache.put(value, result);
+            result = s;
+            stringCache.put(result, result);
         }
         return result;
     }

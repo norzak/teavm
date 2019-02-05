@@ -19,10 +19,11 @@ import java.io.IOException;
 import org.teavm.backend.javascript.codegen.SourceWriter;
 import org.teavm.backend.javascript.spi.Generator;
 import org.teavm.backend.javascript.spi.GeneratorContext;
+import org.teavm.backend.javascript.spi.VirtualMethodContributor;
+import org.teavm.backend.javascript.spi.VirtualMethodContributorContext;
 import org.teavm.dependency.DependencyAgent;
 import org.teavm.dependency.DependencyPlugin;
 import org.teavm.dependency.MethodDependency;
-import org.teavm.model.CallLocation;
 import org.teavm.model.ClassReader;
 import org.teavm.model.ElementModifier;
 import org.teavm.model.MethodReader;
@@ -30,7 +31,7 @@ import org.teavm.model.MethodReference;
 import org.teavm.model.ValueType;
 import org.teavm.platform.async.AsyncCallback;
 
-public class AsyncMethodGenerator implements Generator, DependencyPlugin {
+public class AsyncMethodGenerator implements Generator, DependencyPlugin, VirtualMethodContributor {
     private static final MethodReference completeMethod = new MethodReference(AsyncCallback.class, "complete",
             Object.class, void.class);
     private static final MethodReference errorMethod = new MethodReference(AsyncCallback.class, "error",
@@ -94,10 +95,11 @@ public class AsyncMethodGenerator implements Generator, DependencyPlugin {
     }
 
     @Override
-    public void methodReached(DependencyAgent agent, MethodDependency method, CallLocation location) {
+    public void methodReached(DependencyAgent agent, MethodDependency method) {
         MethodReference ref = method.getReference();
         MethodReference asyncRef = getAsyncReference(ref);
-        MethodDependency asyncMethod = agent.linkMethod(asyncRef, location);
+        MethodDependency asyncMethod = agent.linkMethod(asyncRef);
+        method.addLocationListener(asyncMethod::addLocation);
         int paramCount = ref.parameterCount();
         for (int i = 0; i <= paramCount; ++i) {
             method.getVariable(i).connect(asyncMethod.getVariable(i));
@@ -105,21 +107,26 @@ public class AsyncMethodGenerator implements Generator, DependencyPlugin {
         asyncMethod.getVariable(paramCount + 1).propagate(agent.getType(AsyncCallbackWrapper.class.getName()));
 
         MethodDependency completeMethod = agent.linkMethod(
-                new MethodReference(AsyncCallbackWrapper.class, "complete", Object.class, void.class), null);
+                new MethodReference(AsyncCallbackWrapper.class, "complete", Object.class, void.class));
         if (method.getResult() != null) {
-            completeMethod.getVariable(1).connect(method.getResult(), type -> agent.getClassSource()
-                    .isSuperType(ref.getReturnType(), ValueType.object(type.getName())).orElse(false));
+            completeMethod.getVariable(1).connect(method.getResult(), type -> agent.getClassHierarchy()
+                    .isSuperType(ref.getReturnType(), ValueType.object(type.getName()), false));
         }
         completeMethod.use();
 
         MethodDependency errorMethod = agent.linkMethod(new MethodReference(AsyncCallbackWrapper.class, "error",
-                Throwable.class, void.class), null);
+                Throwable.class, void.class));
         errorMethod.getVariable(1).connect(method.getThrown());
         errorMethod.use();
 
         agent.linkMethod(new MethodReference(AsyncCallbackWrapper.class, "create",
-                AsyncCallback.class, AsyncCallbackWrapper.class), null).use();
+                AsyncCallback.class, AsyncCallbackWrapper.class)).use();
 
         asyncMethod.use();
+    }
+
+    @Override
+    public boolean isVirtual(VirtualMethodContributorContext context, MethodReference methodRef) {
+        return methodRef.equals(completeMethod) || methodRef.equals(errorMethod);
     }
 }

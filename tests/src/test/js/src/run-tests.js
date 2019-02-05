@@ -20,7 +20,6 @@ import * as http from "http";
 import {server as WebSocketServer} from "websocket";
 
 const TEST_FILE_NAME = "test.js";
-const RUNTIME_FILE_NAME = "runtime.js";
 const WASM_RUNTIME_FILE_NAME = "test.wasm-runtime.js";
 const TEST_FILES = [
     { file: TEST_FILE_NAME, name: "simple", type: "js" },
@@ -122,14 +121,14 @@ async function serveFile(path, response) {
 
 async function walkDir(path, name, suite) {
     const files = await fs.readdir(rootDir + "/" + path);
-    if (files.includes(WASM_RUNTIME_FILE_NAME) || files.includes(RUNTIME_FILE_NAME)) {
+    if (files.includes(WASM_RUNTIME_FILE_NAME) || files.includes("test.js")) {
         for (const { file: fileName, name: profileName, type: type } of TEST_FILES) {
             if (files.includes(fileName)) {
                 switch (type) {
                     case "js":
                         suite.testCases.push(new TestCase(
                             "js", name + " " + profileName,
-                            [SERVER_PREFIX + path + "/" + RUNTIME_FILE_NAME, SERVER_PREFIX + path + "/" + fileName]));
+                            [SERVER_PREFIX + path + "/" + fileName]));
                         break;
                     case "wasm":
                         suite.testCases.push(new TestCase(
@@ -277,34 +276,27 @@ class TestRunner {
 
 function runTeaVM() {
     return new Promise(resolve => {
-        $rt_startThread(() => {
-            const thread = $rt_nativeThread();
-            let instance;
-            if (thread.isResuming()) {
-                instance = thread.pop();
+        main([], result => {
+            const message = {};
+            if (result instanceof Error) {
+                makeErrorMessage(message, result);
+            } else {
+                message.status = "OK";
             }
-            try {
-                runTest();
-            } catch (e) {
-                resolve({ status: "failed", errorMessage: buildErrorMessage(e) });
-                return;
-            }
-            if (thread.isSuspending()) {
-                thread.push(instance);
-                return;
-            }
-            resolve({ status: "OK" });
+            resolve(message);
         });
 
-        function buildErrorMessage(e) {
-            let stack = e.stack;
-            if (e.$javaException && e.$javaException.constructor.$meta) {
-                stack = e.$javaException.constructor.$meta.name + ": ";
-                const exceptionMessage = extractException(e.$javaException);
-                stack += exceptionMessage ? $rt_ustr(exceptionMessage) : "";
+        function makeErrorMessage(message, e) {
+            message.status = "failed";
+            if (e.$javaException) {
+                message.className = e.$javaException.constructor.name;
+                message.message = e.$javaException.getMessage();
+            } else {
+                message.className = Object.getPrototypeOf(e).name;
+                message.message = e.message;
             }
-            stack += "\n" + stack;
-            return stack;
+            message.exception = e;
+            message.stack = e.stack;
         }
     })
 }

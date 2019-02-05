@@ -17,10 +17,12 @@ package org.teavm.dependency;
 
 import org.teavm.model.BasicBlock;
 import org.teavm.model.ClassHolder;
+import org.teavm.model.ClassReader;
 import org.teavm.model.ElementModifier;
 import org.teavm.model.FieldHolder;
 import org.teavm.model.FieldReference;
 import org.teavm.model.Instruction;
+import org.teavm.model.MethodDescriptor;
 import org.teavm.model.MethodHolder;
 import org.teavm.model.MethodReference;
 import org.teavm.model.Program;
@@ -31,7 +33,14 @@ import org.teavm.model.instructions.InvokeInstruction;
 import org.teavm.model.instructions.PutFieldInstruction;
 
 public class Linker {
-    public void link(DependencyInfo dependency, ClassHolder cls) {
+    private static final MethodDescriptor clinitDescriptor = new MethodDescriptor("<clinit>", void.class);
+    private DependencyInfo dependency;
+
+    public Linker(DependencyInfo dependency) {
+        this.dependency = dependency;
+    }
+
+    public void link(ClassHolder cls) {
         for (MethodHolder method : cls.getMethods().toArray(new MethodHolder[0])) {
             MethodReference methodRef = method.getReference();
             MethodDependencyInfo methodDep = dependency.getMethod(methodRef);
@@ -41,7 +50,7 @@ public class Linker {
                 method.getModifiers().add(ElementModifier.ABSTRACT);
                 method.setProgram(null);
             } else if (method.getProgram() != null) {
-                link(dependency, method);
+                link(method.getReference(), method.getProgram());
             }
         }
         for (FieldHolder field : cls.getFields().toArray(new FieldHolder[0])) {
@@ -52,8 +61,7 @@ public class Linker {
         }
     }
 
-    private void link(DependencyInfo dependency, MethodHolder method) {
-        Program program = method.getProgram();
+    public void link(MethodReference method, Program program) {
         for (int i = 0; i < program.basicBlockCount(); ++i) {
             BasicBlock block = program.basicBlockAt(i);
             for (Instruction insn : block) {
@@ -73,21 +81,35 @@ public class Linker {
                     }
 
                     FieldReference fieldRef = getField.getField();
-                    if (!fieldRef.getClassName().equals(method.getOwnerName())) {
-                        InitClassInstruction initInsn = new InitClassInstruction();
-                        initInsn.setClassName(fieldRef.getClassName());
-                        initInsn.setLocation(insn.getLocation());
-                        insn.insertPrevious(initInsn);
+                    if (getField.getInstance() == null) {
+                        insertClinit(dependency, fieldRef.getClassName(), method, insn);
+                    }
+                } else if (insn instanceof PutFieldInstruction) {
+                    PutFieldInstruction putField = (PutFieldInstruction) insn;
+                    FieldDependencyInfo linkedField = dependency.getField(putField.getField());
+                    if (linkedField != null) {
+                        putField.setField(linkedField.getReference());
                     }
 
-                } else if (insn instanceof PutFieldInstruction) {
-                    PutFieldInstruction getField = (PutFieldInstruction) insn;
-                    FieldDependencyInfo linkedField = dependency.getField(getField.getField());
-                    if (linkedField != null) {
-                        getField.setField(linkedField.getReference());
+                    FieldReference fieldRef = putField.getField();
+                    if (putField.getInstance() == null) {
+                        insertClinit(dependency, fieldRef.getClassName(), method, insn);
                     }
                 }
             }
+        }
+    }
+
+    private void insertClinit(DependencyInfo dependency, String className, MethodReference method, Instruction insn) {
+        if (className.equals(method.getClassName())) {
+            return;
+        }
+        ClassReader cls = dependency.getClassSource().get(className);
+        if (cls == null || cls.getMethod(clinitDescriptor) != null) {
+            InitClassInstruction initInsn = new InitClassInstruction();
+            initInsn.setClassName(className);
+            initInsn.setLocation(insn.getLocation());
+            insn.insertPrevious(initInsn);
         }
     }
 }

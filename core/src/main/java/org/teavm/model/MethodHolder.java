@@ -15,12 +15,16 @@
  */
 package org.teavm.model;
 
+import java.util.function.Function;
+
 public class MethodHolder extends MemberHolder implements MethodReader {
     private MethodDescriptor descriptor;
     private ClassHolder owner;
     private Program program;
+    private Function<MethodHolder, Program> programSupplier;
     private AnnotationValue annotationDefault;
     private AnnotationContainer[] parameterAnnotations;
+    private MethodReference reference;
 
     public MethodHolder(MethodDescriptor descriptor) {
         super(descriptor.getName());
@@ -80,6 +84,7 @@ public class MethodHolder extends MemberHolder implements MethodReader {
     }
 
     void setOwner(ClassHolder owner) {
+        reference = null;
         this.owner = owner;
     }
 
@@ -90,11 +95,31 @@ public class MethodHolder extends MemberHolder implements MethodReader {
 
     @Override
     public MethodReference getReference() {
-        return owner != null ? new MethodReference(owner.getName(), descriptor) : null;
+        if (owner == null) {
+            return null;
+        }
+        if (reference == null) {
+            reference = new MethodReference(owner.getName(), descriptor);
+        }
+        return reference;
+    }
+
+    public void updateReference(ReferenceCache cache) {
+        MethodReference reference = getReference();
+        if (reference != null) {
+            this.reference = cache.getCached(reference);
+        }
     }
 
     @Override
     public Program getProgram() {
+        if (program == null && programSupplier != null) {
+            program = programSupplier.apply(this);
+            if (program != null) {
+                program.setMethod(this);
+            }
+            programSupplier = null;
+        }
         return program;
     }
 
@@ -103,9 +128,18 @@ public class MethodHolder extends MemberHolder implements MethodReader {
             this.program.setMethod(null);
         }
         this.program = program;
+        this.programSupplier = null;
         if (this.program != null) {
             this.program.setMethod(this);
         }
+    }
+
+    public void setProgramSupplier(Function<MethodHolder, Program> programSupplier) {
+        if (this.program != null) {
+            this.program.setMethod(null);
+        }
+        this.program = null;
+        this.programSupplier = programSupplier;
     }
 
     @Override

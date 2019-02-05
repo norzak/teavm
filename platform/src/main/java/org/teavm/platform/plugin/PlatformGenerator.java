@@ -25,14 +25,18 @@ import org.teavm.backend.javascript.spi.InjectorContext;
 import org.teavm.dependency.DependencyAgent;
 import org.teavm.dependency.DependencyPlugin;
 import org.teavm.dependency.MethodDependency;
-import org.teavm.model.*;
+import org.teavm.model.ClassReader;
+import org.teavm.model.MethodDescriptor;
+import org.teavm.model.MethodReader;
+import org.teavm.model.MethodReference;
+import org.teavm.model.ValueType;
 import org.teavm.platform.Platform;
 import org.teavm.platform.PlatformClass;
 import org.teavm.platform.PlatformRunnable;
 
 public class PlatformGenerator implements Generator, Injector, DependencyPlugin {
     @Override
-    public void methodReached(DependencyAgent agent, MethodDependency method, CallLocation location) {
+    public void methodReached(DependencyAgent agent, MethodDependency method) {
         switch (method.getReference().getName()) {
             case "asJavaClass":
                 method.getResult().propagate(agent.getType("java.lang.Class"));
@@ -43,7 +47,7 @@ public class PlatformGenerator implements Generator, Injector, DependencyPlugin 
             case "startThread":
             case "schedule": {
                 MethodDependency launchMethod = agent.linkMethod(new MethodReference(Platform.class,
-                        "launchThread", PlatformRunnable.class, void.class), null);
+                        "launchThread", PlatformRunnable.class, void.class));
                 method.getVariable(1).connect(launchMethod.getVariable(1));
                 launchMethod.use();
                 break;
@@ -193,9 +197,10 @@ public class PlatformGenerator implements Generator, Injector, DependencyPlugin 
             }
         }
 
-        String selfName = writer.getNaming().getFullNameFor(new MethodReference(Platform.class, "getEnumConstants",
-                PlatformClass.class, Enum[].class));
-        writer.append(selfName).ws().append("=").ws().append("function(cls)").ws().append("{").softNewLine().indent();
+        MethodReference selfRef = new MethodReference(Platform.class, "getEnumConstants",
+                PlatformClass.class, Enum[].class);
+        writer.appendMethodBody(selfRef).ws().append("=").ws().append("function(cls)").ws().append("{").softNewLine()
+                .indent();
         writer.append("if").ws().append("(!cls.hasOwnProperty(c))").ws().append("{").indent().softNewLine();
         writer.append("return null;").softNewLine();
         writer.outdent().append("}").softNewLine();
@@ -206,7 +211,7 @@ public class PlatformGenerator implements Generator, Injector, DependencyPlugin 
         writer.append("return cls[c];").softNewLine();
         writer.outdent().append("};").softNewLine();
 
-        writer.append("return ").append(selfName).append("(").append(context.getParameterName(1))
+        writer.append("return ").appendMethodBody(selfRef).append("(").append(context.getParameterName(1))
                 .append(");").softNewLine();
     }
 
@@ -217,21 +222,22 @@ public class PlatformGenerator implements Generator, Injector, DependencyPlugin 
             if (annotCls != null) {
                 writer.appendClass(clsName).append("[c]").ws().append("=").ws();
                 MethodReference ctor = new MethodReference(annotCls.getName(), "<init>", ValueType.VOID);
-                writer.append(writer.getNaming().getNameForInit(ctor));
+                writer.appendInit(ctor);
                 writer.append("();").softNewLine();
             }
         }
 
-        String selfName = writer.getNaming().getFullNameFor(new MethodReference(Platform.class, "getAnnotations",
-                PlatformClass.class, Annotation[].class));
-        writer.append(selfName).ws().append("=").ws().append("function(cls)").ws().append("{").softNewLine().indent();
+        MethodReference selfRef = new MethodReference(Platform.class, "getAnnotations", PlatformClass.class,
+                Annotation[].class);
+        writer.appendMethodBody(selfRef).ws().append("=").ws().append("function(cls)").ws().append("{").softNewLine()
+                .indent();
         writer.append("if").ws().append("(!cls.hasOwnProperty(c))").ws().append("{").indent().softNewLine();
         writer.append("return null;").softNewLine();
         writer.outdent().append("}").softNewLine();
         writer.append("return cls[c].").appendMethod("getAnnotations", Annotation[].class).append("();").softNewLine();
         writer.outdent().append("};").softNewLine();
 
-        writer.append("return ").append(selfName).append("(").append(context.getParameterName(1))
+        writer.append("return ").appendMethodBody(selfRef).append("(").append(context.getParameterName(1))
                 .append(");").softNewLine();
     }
 }

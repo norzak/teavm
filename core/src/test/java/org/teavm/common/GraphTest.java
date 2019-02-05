@@ -171,7 +171,7 @@ public class GraphTest {
 
         assertTrue("Should be irreducible", GraphUtils.isIrreducible(graph));
         assertFalse("Should be reducible", GraphUtils.isIrreducible(result));
-        assertTrue("Should be equialent", isEquialent(backend, graph));
+        assertTrue("Should be equivalent", isEquialent(backend, graph));
     }
 
     @Test
@@ -229,8 +229,8 @@ public class GraphTest {
     private IntPredicate filter = (int node) -> true;
 
     private void sortSccs(int[][] sccs) {
-        for (int i = 0; i < sccs.length; ++i) {
-            Arrays.sort(sccs[i]);
+        for (int[] scc : sccs) {
+            Arrays.sort(scc);
         }
         Arrays.sort(sccs, Comparator.comparingInt(o -> o[0]));
     }

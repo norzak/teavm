@@ -34,7 +34,7 @@ class TypeSet {
     private int typesCount;
 
     Set<DependencyNode> domain = new LinkedHashSet<>();
-    ObjectArrayList<DependencyNodeToNodeTransition> transitions;
+    ObjectArrayList<Transition> transitions;
     ArrayList<ConsumerWithNode> consumers;
 
     TypeSet(DependencyAnalyzer dependencyAnalyzer, DependencyNode origin) {
@@ -95,12 +95,33 @@ class TypeSet {
         int j = 0;
         DependencyType[] types;
         if (this.types != null) {
-            types = new DependencyType[this.types.cardinality()];
-            for (int index = this.types.nextSetBit(0); index >= 0; index = this.types.nextSetBit(index + 1)) {
-                DependencyType type = dependencyAnalyzer.types.get(index);
-                if (sourceNode.filter(type) && !targetNode.hasType(type) && targetNode.filter(type)
-                        && (filter == null || filter.match(type))) {
-                    types[j++] = type;
+            int[] filteredTypes = null;
+            if (typesCount > 15) {
+                filteredTypes = filter != null ? filter.tryExtract(this.types) : null;
+                if (filteredTypes == null) {
+                    filteredTypes = sourceNode.getFilter().tryExtract(this.types);
+                }
+                if (filteredTypes == null) {
+                    filteredTypes = targetNode.getFilter().tryExtract(this.types);
+                }
+            }
+            if (filteredTypes != null) {
+                types = new DependencyType[filteredTypes.length];
+                for (int index : filteredTypes) {
+                    DependencyType type = dependencyAnalyzer.types.get(index);
+                    if (sourceNode.filter(type) && !targetNode.hasType(type) && targetNode.filter(type)
+                            && (filter == null || filter.match(type))) {
+                        types[j++] = type;
+                    }
+                }
+            } else {
+                types = new DependencyType[typesCount];
+                for (int index = this.types.nextSetBit(0); index >= 0; index = this.types.nextSetBit(index + 1)) {
+                    DependencyType type = dependencyAnalyzer.types.get(index);
+                    if (sourceNode.filter(type) && !targetNode.hasType(type) && targetNode.filter(type)
+                            && (filter == null || filter.match(type))) {
+                        types[j++] = type;
+                    }
                 }
             }
         } else if (this.smallTypes != null) {
@@ -154,13 +175,13 @@ class TypeSet {
         consumers = null;
     }
 
-    ObjectArrayList<DependencyNodeToNodeTransition> getTransitions() {
+    ObjectArrayList<Transition> getTransitions() {
         if (transitions == null) {
             transitions = new ObjectArrayList<>(domain.size() * 2);
             for (DependencyNode node : domain) {
                 if (node.transitions != null) {
-                    for (ObjectCursor<DependencyNodeToNodeTransition> cursor : node.transitionList) {
-                        DependencyNodeToNodeTransition transition = cursor.value;
+                    for (ObjectCursor<Transition> cursor : node.transitionList) {
+                        Transition transition = cursor.value;
                         if (transition.filter != null || transition.destination.typeSet != this) {
                             transitions.add(transition);
                         }

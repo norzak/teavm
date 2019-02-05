@@ -79,7 +79,13 @@ public class VirtualTableProvider {
         if (newDescriptors != null) {
             for (MethodDescriptor method : newDescriptors) {
                 if (!table.entries.containsKey(method)) {
-                    table.entries.put(method, new VirtualTableEntry(table, method, null, table.entries.size()));
+                    MethodReader implementation = classSource.resolveImplementation(
+                            className, method);
+                    MethodReference implementationRef = implementation != null
+                            ? implementation.getReference()
+                            : null;
+                    table.entries.put(method, new VirtualTableEntry(table, method, implementationRef,
+                            table.entries.size()));
                 }
             }
         }

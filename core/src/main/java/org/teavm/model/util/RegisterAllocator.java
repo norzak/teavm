@@ -26,7 +26,6 @@ import org.teavm.common.MutableGraphNode;
 import org.teavm.model.BasicBlock;
 import org.teavm.model.Incoming;
 import org.teavm.model.Instruction;
-import org.teavm.model.MethodReader;
 import org.teavm.model.MethodReference;
 import org.teavm.model.Phi;
 import org.teavm.model.Program;
@@ -36,7 +35,7 @@ import org.teavm.model.instructions.AssignInstruction;
 import org.teavm.model.instructions.JumpInstruction;
 
 public class RegisterAllocator {
-    public void allocateRegisters(MethodReader method, Program program) {
+    public void allocateRegisters(MethodReference method, Program program, boolean debuggerFriendly) {
         insertPhiArgumentsCopies(program);
         InterferenceGraphBuilder interferenceBuilder = new InterferenceGraphBuilder();
         LivenessAnalyzer liveness = new LivenessAnalyzer();
@@ -60,8 +59,8 @@ public class RegisterAllocator {
         for (int cls : classArray) {
             maxClass = Math.max(maxClass, cls + 1);
         }
-        int[] categories = getVariableCategories(program, method.getReference());
-        String[] names = getVariableNames(program);
+        int[] categories = getVariableCategories(program, method);
+        String[] names = getVariableNames(program, debuggerFriendly);
         colorer.colorize(MutableGraphNode.toGraph(interferenceGraph), colors, categories, names);
 
         int maxColor = 0;
@@ -100,10 +99,13 @@ public class RegisterAllocator {
         return categories;
     }
 
-    private String[] getVariableNames(ProgramReader program) {
+    private String[] getVariableNames(ProgramReader program, boolean debuggerFriendly) {
         String[] names = new String[program.variableCount()];
         for (int i = 0; i < names.length; ++i) {
             names[i] = program.variableAt(i).getDebugName();
+            if (debuggerFriendly && names[i] == null) {
+                names[i] = "";
+            }
         }
         return names;
     }
@@ -146,7 +148,7 @@ public class RegisterAllocator {
     }
 
     private void insertCopy(Incoming incoming, Map<BasicBlock, BasicBlock> blockMap) {
-        final Phi phi = incoming.getPhi();
+        Phi phi = incoming.getPhi();
         Program program = phi.getBasicBlock().getProgram();
         AssignInstruction copyInstruction = new AssignInstruction();
         Variable firstCopy = program.createVariable();
@@ -161,8 +163,9 @@ public class RegisterAllocator {
             incoming.setSource(source);
         }
         if (!(incoming.getSource().getLastInstruction() instanceof JumpInstruction)) {
-            final BasicBlock copyBlock = program.createBasicBlock();
+            BasicBlock copyBlock = program.createBasicBlock();
             JumpInstruction jumpInstruction = new JumpInstruction();
+            jumpInstruction.setLocation(incoming.getSource().getLastInstruction().getLocation());
             jumpInstruction.setTarget(phi.getBasicBlock());
             copyBlock.add(jumpInstruction);
             incoming.getSource().getLastInstruction().acceptVisitor(new BasicBlockMapper((int block) ->
@@ -231,14 +234,14 @@ public class RegisterAllocator {
         }
     }
 
-    private void renameVariables(final Program program, final int[] varMap) {
+    private void renameVariables(Program program, int[] varMap) {
         InstructionVariableMapper mapper = new InstructionVariableMapper(var ->
                 program.variableAt(varMap[var.getIndex()]));
         for (int i = 0; i < program.basicBlockCount(); ++i) {
             BasicBlock block = program.basicBlockAt(i);
             mapper.apply(block);
         }
-        String[] originalNames = getVariableNames(program);
+        String[] originalNames = getVariableNames(program, false);
         for (int i = 0; i < program.variableCount(); ++i) {
             program.variableAt(i).setDebugName(null);
         }

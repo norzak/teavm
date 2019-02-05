@@ -15,6 +15,8 @@
  */
 package org.teavm.backend.javascript.codegen;
 
+import com.carrotsearch.hppc.ObjectIntHashMap;
+import com.carrotsearch.hppc.ObjectIntMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -25,43 +27,48 @@ import org.teavm.model.MethodReference;
 
 public class DefaultAliasProvider implements AliasProvider {
     private final Map<String, String> classAliases = new HashMap<>();
-    private final Set<String> knownAliases = new HashSet<>();
-    private final Set<String> knownVirtualAliases = new HashSet<>();
+    private final Set<String> knownAliases = new HashSet<>(200, 0.5f);
+    private final ObjectIntMap<String> knowAliasesCounter = new ObjectIntHashMap<>();
+    private final Set<String> knownVirtualAliases = new HashSet<>(200, 0.5f);
+    private final ObjectIntMap<String> knowVirtualAliasesCounter = new ObjectIntHashMap<>();
 
     @Override
     public String getClassAlias(String cls) {
-        return classAliases.computeIfAbsent(cls, key -> {
-            StringBuilder alias = new StringBuilder();
-            int lastIndex = 0;
-            while (true) {
-                int index = cls.indexOf('.', lastIndex);
-                if (index == -1) {
-                    if (lastIndex > 0) {
-                        alias.append("_");
-                    }
-                    alias.append(cls.substring(lastIndex));
-                    break;
-                } else {
-                    if (index > lastIndex) {
-                        alias.append(cls.charAt(lastIndex));
-                    }
-                    lastIndex = index + 1;
+        return classAliases.computeIfAbsent(cls, key -> makeUnique(knownAliases, knowAliasesCounter,
+                suggestAliasForClass(key)));
+    }
+
+    private static String suggestAliasForClass(String cls) {
+        StringBuilder alias = new StringBuilder();
+        int lastIndex = 0;
+        while (true) {
+            int index = cls.indexOf('.', lastIndex);
+            if (index == -1) {
+                if (lastIndex > 0) {
+                    alias.append("_");
                 }
-            }
-
-            for (int i = 1; i < alias.length(); ++i) {
-                char c = alias.charAt(i);
-                if (!Character.isJavaIdentifierPart(c)) {
-                    alias.setCharAt(i, '_');
+                alias.append(cls.substring(lastIndex));
+                break;
+            } else {
+                if (index > lastIndex) {
+                    alias.append(cls.charAt(lastIndex));
                 }
+                lastIndex = index + 1;
             }
+        }
 
-            if (!Character.isJavaIdentifierStart(alias.charAt(0))) {
-                alias.setCharAt(0, '_');
+        for (int i = 1; i < alias.length(); ++i) {
+            char c = alias.charAt(i);
+            if (!Character.isJavaIdentifierPart(c)) {
+                alias.setCharAt(i, '_');
             }
+        }
 
-            return makeUnique(knownAliases, alias.toString());
-        });
+        if (!Character.isJavaIdentifierStart(alias.charAt(0))) {
+            alias.setCharAt(0, '_');
+        }
+
+        return alias.toString();
     }
 
     @Override
@@ -78,7 +85,7 @@ public class DefaultAliasProvider implements AliasProvider {
                 alias = "$" + alias;
                 break;
         }
-        return makeUnique(knownVirtualAliases, alias);
+        return makeUnique(knownVirtualAliases, knowVirtualAliasesCounter, alias);
     }
 
     @Override
@@ -93,17 +100,18 @@ public class DefaultAliasProvider implements AliasProvider {
                 break;
         }
 
-        return makeUnique(knownAliases, getClassAlias(method.getClassName()) + "_" + alias);
+        return makeUnique(knownAliases, knowAliasesCounter, getClassAlias(method.getClassName()) + "_" + alias);
     }
 
     @Override
     public String getFieldAlias(FieldReference field) {
-        return makeUnique(knownVirtualAliases, "$" + field.getFieldName());
+        return makeUnique(knownVirtualAliases, knowVirtualAliasesCounter, "$" + field.getFieldName());
     }
 
     @Override
     public String getStaticFieldAlias(FieldReference field) {
-        return makeUnique(knownAliases, getClassAlias(field.getClassName()) + "_" + field.getFieldName());
+        return makeUnique(knownAliases, knowAliasesCounter,
+                getClassAlias(field.getClassName()) + "_" + field.getFieldName());
     }
 
     @Override
@@ -111,12 +119,21 @@ public class DefaultAliasProvider implements AliasProvider {
         return name;
     }
 
-    private String makeUnique(Set<String> knowAliases, String alias) {
+    @Override
+    public String getClassInitAlias(String className) {
+        return makeUnique(knownAliases, knowAliasesCounter, suggestAliasForClass(className) + "_$callClinit");
+    }
+
+    private String makeUnique(Set<String> knowAliases, ObjectIntMap<String> indexMap, String alias) {
         String uniqueAlias = alias;
-        int index = 1;
+        int index = indexMap.get(alias);
+        if (index > 0) {
+            uniqueAlias = alias + index++;
+        }
         while (!knowAliases.add(uniqueAlias)) {
             uniqueAlias = alias + index++;
         }
+        indexMap.put(alias, index);
         return uniqueAlias;
     }
 }

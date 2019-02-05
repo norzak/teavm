@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -31,6 +32,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.teavm.ast.decompilation.Decompiler;
 import org.teavm.backend.c.analyze.CDependencyListener;
 import org.teavm.backend.c.generate.BufferedCodeWriter;
@@ -47,8 +49,10 @@ import org.teavm.backend.c.intrinsic.AllocatorIntrinsic;
 import org.teavm.backend.c.intrinsic.ExceptionHandlingIntrinsic;
 import org.teavm.backend.c.intrinsic.FunctionIntrinsic;
 import org.teavm.backend.c.intrinsic.GCIntrinsic;
+import org.teavm.backend.c.intrinsic.IntegerIntrinsic;
 import org.teavm.backend.c.intrinsic.Intrinsic;
 import org.teavm.backend.c.intrinsic.IntrinsicFactory;
+import org.teavm.backend.c.intrinsic.LongIntrinsic;
 import org.teavm.backend.c.intrinsic.MutatorIntrinsic;
 import org.teavm.backend.c.intrinsic.PlatformClassIntrinsic;
 import org.teavm.backend.c.intrinsic.PlatformClassMetadataIntrinsic;
@@ -57,6 +61,7 @@ import org.teavm.backend.c.intrinsic.PlatformObjectIntrinsic;
 import org.teavm.backend.c.intrinsic.RuntimeClassIntrinsic;
 import org.teavm.backend.c.intrinsic.ShadowStackIntrinsic;
 import org.teavm.backend.c.intrinsic.StructureIntrinsic;
+import org.teavm.cache.AlwaysStaleCacheStatus;
 import org.teavm.dependency.ClassDependency;
 import org.teavm.dependency.DependencyAnalyzer;
 import org.teavm.dependency.DependencyListener;
@@ -162,45 +167,45 @@ public class CTarget implements TeaVMTarget, TeaVMCHost {
     @Override
     public void contributeDependencies(DependencyAnalyzer dependencyAnalyzer) {
         dependencyAnalyzer.linkMethod(new MethodReference(Allocator.class, "allocate",
-                RuntimeClass.class, Address.class), null).use();
+                RuntimeClass.class, Address.class)).use();
         dependencyAnalyzer.linkMethod(new MethodReference(Allocator.class, "allocateArray",
-                RuntimeClass.class, int.class, Address.class), null).use();
+                RuntimeClass.class, int.class, Address.class)).use();
         dependencyAnalyzer.linkMethod(new MethodReference(Allocator.class, "allocateMultiArray",
-                RuntimeClass.class, Address.class, int.class, RuntimeArray.class), null).use();
+                RuntimeClass.class, Address.class, int.class, RuntimeArray.class)).use();
 
-        dependencyAnalyzer.linkMethod(new MethodReference(Allocator.class, "<clinit>", void.class), null).use();
+        dependencyAnalyzer.linkMethod(new MethodReference(Allocator.class, "<clinit>", void.class)).use();
 
         dependencyAnalyzer.linkMethod(new MethodReference(ExceptionHandling.class, "throwException",
-                Throwable.class, void.class), null).use();
+                Throwable.class, void.class)).use();
         dependencyAnalyzer.linkMethod(new MethodReference(ExceptionHandling.class, "throwClassCastException",
-                void.class), null).use();
+                void.class)).use();
         dependencyAnalyzer.linkMethod(new MethodReference(ExceptionHandling.class, "throwNullPointerException",
-                void.class), null).use();
+                void.class)).use();
 
         dependencyAnalyzer.linkMethod(new MethodReference(ExceptionHandling.class, "catchException",
-                Throwable.class), null).use();
+                Throwable.class)).use();
 
-        dependencyAnalyzer.linkClass("java.lang.String", null);
-        dependencyAnalyzer.linkClass("java.lang.Class", null);
-        dependencyAnalyzer.linkField(new FieldReference("java.lang.String", "hashCode"), null);
+        dependencyAnalyzer.linkClass("java.lang.String");
+        dependencyAnalyzer.linkClass("java.lang.Class");
+        dependencyAnalyzer.linkField(new FieldReference("java.lang.String", "hashCode"));
 
-        ClassDependency runtimeClassDep = dependencyAnalyzer.linkClass(RuntimeClass.class.getName(), null);
-        ClassDependency runtimeObjectDep = dependencyAnalyzer.linkClass(RuntimeObject.class.getName(), null);
-        ClassDependency runtimeArrayDep = dependencyAnalyzer.linkClass(RuntimeArray.class.getName(), null);
+        ClassDependency runtimeClassDep = dependencyAnalyzer.linkClass(RuntimeClass.class.getName());
+        ClassDependency runtimeObjectDep = dependencyAnalyzer.linkClass(RuntimeObject.class.getName());
+        ClassDependency runtimeArrayDep = dependencyAnalyzer.linkClass(RuntimeArray.class.getName());
         for (ClassDependency classDep : Arrays.asList(runtimeClassDep, runtimeObjectDep, runtimeArrayDep)) {
             for (FieldReader field : classDep.getClassReader().getFields()) {
-                dependencyAnalyzer.linkField(field.getReference(), null);
+                dependencyAnalyzer.linkField(field.getReference());
             }
         }
     }
 
     @Override
-    public void beforeOptimizations(Program program, MethodReader method, ListableClassReaderSource classSource) {
+    public void beforeOptimizations(Program program, MethodReader method) {
         nullCheckInsertion.transformProgram(program, method.getReference());
     }
 
     @Override
-    public void afterOptimizations(Program program, MethodReader method, ListableClassReaderSource classSource) {
+    public void afterOptimizations(Program program, MethodReader method) {
         clinitInsertionTransformer.apply(method, program);
         classInitializerEliminator.apply(program);
         classInitializerTransformer.transform(program);
@@ -214,8 +219,8 @@ public class CTarget implements TeaVMTarget, TeaVMCHost {
         TagRegistry tagRegistry = new TagRegistry(classes);
         StringPool stringPool = new StringPool();
 
-        Decompiler decompiler = new Decompiler(classes, controller.getClassLoader(), new HashSet<>(),
-                new HashSet<>(), false, true);
+        Decompiler decompiler = new Decompiler(classes, controller.getClassLoader(),
+                AlwaysStaleCacheStatus.INSTANCE, new HashSet<>(), new HashSet<>(), false, true);
         Characteristics characteristics = new Characteristics(controller.getUnprocessedClassSource());
 
         NameProvider nameProvider = new NameProvider(controller.getUnprocessedClassSource());
@@ -234,6 +239,8 @@ public class CTarget implements TeaVMTarget, TeaVMCHost {
         intrinsics.add(new ExceptionHandlingIntrinsic());
         intrinsics.add(new FunctionIntrinsic(characteristics, exportDependencyListener.getResolvedMethods()));
         intrinsics.add(new RuntimeClassIntrinsic());
+        intrinsics.add(new LongIntrinsic());
+        intrinsics.add(new IntegerIntrinsic());
 
         List<Generator> generators = new ArrayList<>();
         generators.add(new ArrayGenerator());
@@ -257,10 +264,16 @@ public class CTarget implements TeaVMTarget, TeaVMCHost {
         generateClasses(classes, classGenerator);
         generateSpecialFunctions(context, codeWriter);
         copyResource(codeWriter, "runtime-epilogue.c");
-        generateMain(context, codeWriter, classes, classGenerator.getTypes());
+
+        List<ValueType> types = classGenerator.getTypes().stream()
+                .filter(c -> ClassGenerator.needsVirtualTable(characteristics, c))
+                .collect(Collectors.toList());
+
+        generateArrayOfClassReferences(context, codeWriter, types);
+        generateMain(context, codeWriter, classes, types);
 
         try (PrintWriter writer = new PrintWriter(new OutputStreamWriter(
-                buildTarget.createResource(outputName), "UTF-8"))) {
+                buildTarget.createResource(outputName), StandardCharsets.UTF_8))) {
             codeWriter.writeTo(writer);
         }
     }
@@ -378,8 +391,27 @@ public class CTarget implements TeaVMTarget, TeaVMCHost {
         writer.outdent().println("}");
     }
 
+    private void generateArrayOfClassReferences(GenerationContext context, CodeWriter writer,
+            List<? extends ValueType> types) {
+        writer.print("static JavaClass* teavm_classReferences[" + types.size() + "] = {").indent();
+        boolean first = true;
+        for (ValueType type : types) {
+            if (!first) {
+                writer.print(", ");
+            }
+            writer.println();
+            first = false;
+            String typeName = context.getNames().forClassInstance(type);
+            writer.print("(JavaClass*) &" + typeName);
+        }
+        if (!first) {
+            writer.println();
+        }
+        writer.outdent().println("};");
+    }
+
     private void generateMain(GenerationContext context, CodeWriter writer, ListableClassHolderSource classes,
-            Set<? extends ValueType> types) {
+            List<? extends ValueType> types) {
         writer.println("int main(int argc, char** argv) {").indent();
 
         writer.println("TeaVM_beforeInit();");
@@ -415,20 +447,22 @@ public class CTarget implements TeaVMTarget, TeaVMCHost {
     }
 
     private void generateVirtualTableHeaders(GenerationContext context, CodeWriter writer,
-            Set<? extends ValueType> types) {
+            List<? extends ValueType> types) {
+        writer.println("TeaVM_beforeClasses = (char*) teavm_classReferences[0];");
+        writer.println("for (int i = 1; i < " + types.size() + "; ++i) {").indent();
+        writer.println("char* c = (char*) teavm_classReferences[i];");
+        writer.println("if (c < TeaVM_beforeClasses) TeaVM_beforeClasses = c;");
+        writer.outdent().println("}");
+        writer.println("TeaVM_beforeClasses -= 4096;");
+
         String classClassName = context.getNames().forClassInstance(ValueType.object("java.lang.Class"));
         writer.print("int32_t classHeader = PACK_CLASS(&" + classClassName + ") | ");
         CodeGeneratorUtil.writeValue(writer, context, RuntimeObject.GC_MARKED);
         writer.println(";");
 
-        for (ValueType type : types) {
-            if (!ClassGenerator.needsVirtualTable(context.getCharacteristics(), type)) {
-                continue;
-            }
-
-            String typeName = context.getNames().forClassInstance(type);
-            writer.println("((JavaObject*) &" + typeName + ")->header = classHeader;");
-        }
+        writer.println("for (int i = 0; i < " + types.size() + "; ++i) {").indent();
+        writer.println("teavm_classReferences[i]->parent.header = classHeader;");
+        writer.outdent().println("}");
     }
 
     private void generateStringPoolHeaders(GenerationContext context, CodeWriter writer) {
@@ -446,7 +480,7 @@ public class CTarget implements TeaVMTarget, TeaVMCHost {
     private void generateCallToMainMethod(GenerationContext context, CodeWriter writer) {
         TeaVMEntryPoint entryPoint = controller.getEntryPoints().get("main");
         if (entryPoint != null) {
-            String mainMethod = context.getNames().forMethod(entryPoint.getReference());
+            String mainMethod = context.getNames().forMethod(entryPoint.getMethod());
             writer.println(mainMethod + "(NULL);");
         }
     }

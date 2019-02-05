@@ -34,6 +34,7 @@ import org.teavm.ast.NativeMethodNode;
 import org.teavm.ast.NewArrayExpr;
 import org.teavm.ast.NewExpr;
 import org.teavm.ast.NewMultiArrayExpr;
+import org.teavm.ast.OperationType;
 import org.teavm.ast.QualificationExpr;
 import org.teavm.ast.RecursiveVisitor;
 import org.teavm.ast.RegularMethodNode;
@@ -51,6 +52,15 @@ import org.teavm.model.MethodReference;
 import org.teavm.model.ValueType;
 
 class NameFrequencyEstimator extends RecursiveVisitor implements MethodNodeVisitor {
+    static final MethodReference MONITOR_ENTER_METHOD = new MethodReference(Object.class,
+            "monitorEnter", Object.class, void.class);
+    static final MethodReference MONITOR_ENTER_SYNC_METHOD = new MethodReference(Object.class,
+            "monitorEnterSync", Object.class, void.class);
+    static final MethodReference MONITOR_EXIT_METHOD = new MethodReference(Object.class,
+            "monitorExit", Object.class, void.class);
+    static final MethodReference MONITOR_EXIT_SYNC_METHOD = new MethodReference(Object.class,
+            "monitorExitSync", Object.class, void.class);
+
     private final NameFrequencyConsumer consumer;
     private final ClassReaderSource classSource;
     private boolean async;
@@ -100,6 +110,11 @@ class NameFrequencyEstimator extends RecursiveVisitor implements MethodNodeVisit
                 consumer.consumeFunction("$rt_resuming");
                 consumer.consumeFunction("$rt_invalidPointer");
             }
+            method.acceptVisitor(this);
+        }
+
+        if (clinit != null) {
+            consumer.consumeFunction("$rt_eraseClinit");
         }
 
         // Metadata
@@ -147,7 +162,7 @@ class NameFrequencyEstimator extends RecursiveVisitor implements MethodNodeVisit
 
     @Override
     public void visit(InitClassStatement statement) {
-        consumer.consume(statement.getClassName());
+        consumer.consumeClassInit(statement.getClassName());
     }
 
     @Override
@@ -162,14 +177,10 @@ class NameFrequencyEstimator extends RecursiveVisitor implements MethodNodeVisit
     public void visit(MonitorEnterStatement statement) {
         super.visit(statement);
         if (async) {
-            MethodReference monitorEnterRef = new MethodReference(
-                    Object.class, "monitorEnter", Object.class, void.class);
-            consumer.consume(monitorEnterRef);
+            consumer.consume(MONITOR_ENTER_METHOD);
             consumer.consumeFunction("$rt_suspending");
         } else {
-            MethodReference monitorEnterRef = new MethodReference(
-                    Object.class, "monitorEnterSync", Object.class, void.class);
-            consumer.consume(monitorEnterRef);
+            consumer.consume(MONITOR_ENTER_SYNC_METHOD);
         }
     }
 
@@ -177,13 +188,9 @@ class NameFrequencyEstimator extends RecursiveVisitor implements MethodNodeVisit
     public void visit(MonitorExitStatement statement) {
         super.visit(statement);
         if (async) {
-            MethodReference monitorEnterRef = new MethodReference(
-                    Object.class, "monitorExit", Object.class, void.class);
-            consumer.consume(monitorEnterRef);
+            consumer.consume(MONITOR_EXIT_METHOD);
         } else {
-            MethodReference monitorEnterRef = new MethodReference(
-                    Object.class, "monitorExitSync", Object.class, void.class);
-            consumer.consume(monitorEnterRef);
+            consumer.consume(MONITOR_EXIT_SYNC_METHOD);
         }
     }
 
@@ -193,6 +200,12 @@ class NameFrequencyEstimator extends RecursiveVisitor implements MethodNodeVisit
         switch (expr.getOperation()) {
             case COMPARE:
                 consumer.consumeFunction("$rt_compare");
+                break;
+            case MULTIPLY:
+                if (expr.getType() == OperationType.INT && !RenderingUtil.isSmallInteger(expr.getFirstOperand())
+                        && !RenderingUtil.isSmallInteger(expr.getSecondOperand())) {
+                    consumer.consumeFunction("$rt_imul");
+                }
                 break;
             default:
                 break;

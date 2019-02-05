@@ -29,8 +29,8 @@ typedef struct JavaArray JavaArray;
 typedef struct JavaClass JavaClass;
 typedef struct JavaString JavaString;
 
-#define PACK_CLASS(cls) ((int32_t) ((uintptr_t) ((char*) (cls) - (char*) &TeaVM_beforeClasses) >> 3))
-#define UNPACK_CLASS(cls) ((JavaClass*) ((char*) &TeaVM_beforeClasses + ((cls) << 3)))
+#define PACK_CLASS(cls) ((int32_t) ((uintptr_t) ((char*) (cls) - TeaVM_beforeClasses) >> 3))
+#define UNPACK_CLASS(cls) ((JavaClass*) (TeaVM_beforeClasses + ((cls) << 3)))
 #define CLASS_OF(obj) (UNPACK_CLASS(((JavaObject*) (obj))->header))
 #define AS(ptr, type) ((type*) (ptr))
 
@@ -106,7 +106,7 @@ static int32_t gc_regionSize = INT32_C(32768);
 static int32_t gc_regionMaxCount = INT32_C(0);
 static int64_t gc_availableBytes = INT64_C(0);
 
-static char TeaVM_beforeClasses[128] = "TEAVM";
+static char *TeaVM_beforeClasses;
 
 static double TeaVM_rand() {
     return rand() / ((double) RAND_MAX + 1);
@@ -274,3 +274,24 @@ static int32_t teavm_timeZoneOffset() {
 
 static char* teavm_stringToC(void*);
 static inline void teavm_free(void*);
+
+static inline int64_t teavm_reinterpretDoubleToLong(double v) {
+    union { int64_t longValue; double doubleValue; } conv;
+    conv.doubleValue = v;
+    return conv.longValue;
+}
+static inline double teavm_reinterpretLongToDouble(int64_t v) {
+    union { int64_t longValue; double doubleValue; } conv;
+    conv.longValue = v;
+    return conv.doubleValue;
+}
+static inline int32_t teavm_reinterpretFloatToInt(float v) {
+    union { int32_t intValue; float floatValue; } conv;
+    conv.floatValue = v;
+    return conv.intValue;
+}
+static inline float teavm_reinterpretIntToFloat(int32_t v) {
+    union { int32_t intValue; float floatValue; } conv;
+    conv.intValue = v;
+    return conv.floatValue;
+}
