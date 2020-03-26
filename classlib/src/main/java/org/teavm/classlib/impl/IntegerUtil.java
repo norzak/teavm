@@ -15,8 +15,6 @@
  */
 package org.teavm.classlib.impl;
 
-import org.teavm.classlib.java.lang.TCharacter;
-
 public final class IntegerUtil {
     private IntegerUtil() {
     }
@@ -34,7 +32,7 @@ public final class IntegerUtil {
         int pos = (sz - 1) * radixLog2;
         int target = 0;
         while (pos >= 0) {
-            chars[target++] = TCharacter.forDigit((value >>> pos) & mask, radix);
+            chars[target++] = Character.forDigit((value >>> pos) & mask, radix);
             pos -= radixLog2;
         }
 
@@ -51,10 +49,10 @@ public final class IntegerUtil {
         int sz = (Long.SIZE - Long.numberOfLeadingZeros(value) + radixLog2 - 1) / radixLog2;
         char[] chars = new char[sz];
 
-        long pos = (sz - 1) * radixLog2;
+        int pos = (sz - 1) * radixLog2;
         int target = 0;
         while (pos >= 0) {
-            chars[target++] = TCharacter.forDigit((int) (value >>> pos) & mask, radix);
+            chars[target++] = Character.forDigit((int) (value >>> pos) & mask, radix);
             pos -= radixLog2;
         }
 

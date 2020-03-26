@@ -27,8 +27,10 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.teavm.junit.SkipJVM;
 import org.teavm.junit.TeaVMTestRunner;
+import org.teavm.junit.WholeClassCompilation;
 
 @RunWith(TeaVMTestRunner.class)
+@WholeClassCompilation
 public class SimpleDateFormatTest {
     public SimpleDateFormatTest() {
         TimeZone.setDefault(TimeZone.getTimeZone("GMT"));
@@ -158,5 +160,11 @@ public class SimpleDateFormatTest {
         calendar.setTimeZone(TimeZone.getTimeZone("GMT"));
         calendar.setTime(date);
         return calendar.getTimeInMillis();
+    }
+
+    @Test
+    public void fieldsParsedWithoutDelimiters() throws ParseException {
+        SimpleDateFormat format = new SimpleDateFormat("yyMMddHHmm", Locale.ENGLISH);
+        assertEquals(1403602380000L, getTimeWithoutZoneOffset(format.parse("1406240933")));
     }
 }

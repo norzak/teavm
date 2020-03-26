@@ -23,10 +23,13 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
+import org.teavm.ast.ArrayFromDataExpr;
+import org.teavm.ast.ArrayType;
 import org.teavm.ast.AssignmentStatement;
 import org.teavm.ast.BinaryExpr;
 import org.teavm.ast.BinaryOperation;
 import org.teavm.ast.BlockStatement;
+import org.teavm.ast.BoundCheckExpr;
 import org.teavm.ast.BreakStatement;
 import org.teavm.ast.CastExpr;
 import org.teavm.ast.ConditionalExpr;
@@ -62,6 +65,7 @@ import org.teavm.ast.UnwrapArrayExpr;
 import org.teavm.ast.VariableExpr;
 import org.teavm.ast.WhileStatement;
 import org.teavm.model.TextLocation;
+import org.teavm.model.ValueType;
 
 class OptimizingVisitor implements StatementVisitor, ExprVisitor {
     private static final int MAX_DEPTH = 20;
@@ -69,7 +73,7 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
     Statement resultStmt;
     private final boolean[] preservedVars;
     private final int[] writeFrequencies;
-    private final int[] initialWriteFrequences;
+    private final int[] initialWriteFrequencies;
     private final int[] readFrequencies;
     private final Object[] constants;
     private List<Statement> resultSequence;
@@ -77,12 +81,13 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
     private TextLocation currentLocation;
     private Deque<TextLocation> locationStack = new LinkedList<>();
     private Deque<TextLocation> notNullLocationStack = new ArrayDeque<>();
+    private List<ArrayOptimization> pendingArrayOptimizations;
 
     OptimizingVisitor(boolean[] preservedVars, int[] writeFrequencies, int[] readFrequencies, Object[] constants,
             boolean friendlyToDebugger) {
         this.preservedVars = preservedVars;
         this.writeFrequencies = writeFrequencies;
-        this.initialWriteFrequences = writeFrequencies.clone();
+        this.initialWriteFrequencies = writeFrequencies.clone();
         this.readFrequencies = readFrequencies;
         this.constants = constants;
         this.friendlyToDebugger = friendlyToDebugger;
@@ -279,7 +284,7 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
                 return;
             }
 
-            if (!preservedVars[index] && initialWriteFrequences[index] == 1 && constants[index] != null) {
+            if (!preservedVars[index] && initialWriteFrequencies[index] == 1 && constants[index] != null) {
                 ConstantExpr constantExpr = new ConstantExpr();
                 constantExpr.setValue(constants[index]);
                 constantExpr.setLocation(expr.getLocation());
@@ -505,6 +510,21 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
     }
 
     @Override
+    public void visit(ArrayFromDataExpr expr) {
+        pushLocation(expr.getLocation());
+        try {
+            for (int i = 0; i < expr.getData().size(); ++i) {
+                Expr element = expr.getData().get(i);
+                element.acceptVisitor(this);
+                expr.getData().set(i, resultExpr);
+            }
+            resultExpr = expr;
+        } finally {
+            popLocation();
+        }
+    }
+
+    @Override
     public void visit(InstanceOfExpr expr) {
         pushLocation(expr.getLocation());
         try {
@@ -561,7 +581,7 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
                     left = resultExpr;
                 } else {
                     int varIndex = ((VariableExpr) statement.getLeftValue()).getIndex();
-                    if (!preservedVars[varIndex] && initialWriteFrequences[varIndex] == 1
+                    if (!preservedVars[varIndex] && initialWriteFrequencies[varIndex] == 1
                             && constants[varIndex] != null) {
                         resultStmt = new SequentialStatement();
                         return;
@@ -579,10 +599,13 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
     private List<Statement> processSequence(List<Statement> statements) {
         List<Statement> backup = resultSequence;
         resultSequence = new ArrayList<>();
+        List<ArrayOptimization> pendingArrayOptimizationsBackup = pendingArrayOptimizations;
+        pendingArrayOptimizations = new ArrayList<>();
         processSequenceImpl(statements);
         wieldTryCatch(resultSequence);
         List<Statement> result = resultSequence.stream().filter(part -> part != null).collect(Collectors.toList());
         resultSequence = backup;
+        pendingArrayOptimizations = pendingArrayOptimizationsBackup;
         return result;
     }
 
@@ -603,11 +626,159 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
                 continue;
             }
             resultSequence.add(part);
+            tryArrayOptimization();
             if (part instanceof BreakStatement) {
                 return false;
             }
         }
         return true;
+    }
+
+    private void tryArrayOptimization() {
+        Statement statement;
+        while (!pendingArrayOptimizations.isEmpty()) {
+            statement = resultSequence.get(resultSequence.size() - 1);
+            int i = pendingArrayOptimizations.size() - 1;
+            if (!tryArrayUnwrap(pendingArrayOptimizations.get(i), statement)
+                    || tryArraySet(pendingArrayOptimizations.get(i), statement)) {
+                pendingArrayOptimizations.remove(i);
+            } else {
+                break;
+            }
+        }
+        statement = resultSequence.get(resultSequence.size() - 1);
+        tryArrayConstruction(statement);
+    }
+
+    private void tryArrayConstruction(Statement statement) {
+        if (!(statement instanceof AssignmentStatement)) {
+            return;
+        }
+        AssignmentStatement assign = (AssignmentStatement) statement;
+
+        if (!(assign.getLeftValue() instanceof VariableExpr)) {
+            return;
+        }
+        int constructedArrayVariable = ((VariableExpr) assign.getLeftValue()).getIndex();
+
+        if (!(assign.getRightValue() instanceof NewArrayExpr)) {
+            return;
+        }
+        NewArrayExpr constructedArray = (NewArrayExpr) assign.getRightValue();
+        if (!(constructedArray.getLength() instanceof ConstantExpr)) {
+            return;
+        }
+
+        Object sizeConst = ((ConstantExpr) constructedArray.getLength()).getValue();
+        if (!(sizeConst instanceof Integer)) {
+            return;
+        }
+
+        int constructedArraySize = (int) sizeConst;
+        ArrayOptimization optimization = new ArrayOptimization();
+        optimization.index = resultSequence.size() - 1;
+        optimization.arrayVariable = constructedArrayVariable;
+        optimization.arraySize = constructedArraySize;
+        optimization.array = constructedArray;
+        pendingArrayOptimizations.add(optimization);
+    }
+
+    private boolean tryArrayUnwrap(ArrayOptimization optimization, Statement statement) {
+        if (optimization.unwrappedArray != null) {
+            return true;
+        }
+
+        if (!(statement instanceof AssignmentStatement)) {
+            return false;
+        }
+        AssignmentStatement assign = (AssignmentStatement) statement;
+
+        if (!(assign.getLeftValue() instanceof VariableExpr)) {
+            return false;
+        }
+        optimization.unwrappedArrayVariable = ((VariableExpr) assign.getLeftValue()).getIndex();
+        if (writeFrequencies[optimization.unwrappedArrayVariable] != 1) {
+            return false;
+        }
+
+        if (!(assign.getRightValue() instanceof UnwrapArrayExpr)) {
+            return false;
+        }
+        optimization.unwrappedArray = (UnwrapArrayExpr) assign.getRightValue();
+
+        if (!(optimization.unwrappedArray.getArray() instanceof VariableExpr)) {
+            return false;
+        }
+
+        VariableExpr arrayVar = (VariableExpr) optimization.unwrappedArray.getArray();
+        if (arrayVar.getIndex() != optimization.arrayVariable) {
+            return false;
+        }
+
+        if (!matchArrayType(optimization.array.getType(), optimization.unwrappedArray.getElementType())) {
+            return false;
+        }
+
+        if (optimization.arraySize != readFrequencies[optimization.unwrappedArrayVariable]) {
+            return false;
+        }
+
+        optimization.arrayElementIndex = 0;
+        return true;
+    }
+
+    private boolean tryArraySet(ArrayOptimization optimization, Statement statement) {
+        int expectedIndex = optimization.index + 2 + optimization.arrayElementIndex;
+        if (resultSequence.size() - 1 != expectedIndex) {
+            return false;
+        }
+
+        if (!(statement instanceof AssignmentStatement)) {
+            return false;
+        }
+        AssignmentStatement assign = (AssignmentStatement) statement;
+
+        if (!(assign.getLeftValue() instanceof SubscriptExpr)) {
+            return false;
+        }
+        SubscriptExpr subscript = (SubscriptExpr) assign.getLeftValue();
+
+        if (subscript.getType() != optimization.unwrappedArray.getElementType()) {
+            return false;
+        }
+
+        if (!(subscript.getArray() instanceof VariableExpr)) {
+            return false;
+        }
+        if (((VariableExpr) subscript.getArray()).getIndex() != optimization.unwrappedArrayVariable) {
+            return false;
+        }
+
+        if (!(subscript.getIndex() instanceof ConstantExpr)) {
+            return false;
+        }
+        Object constantValue = ((ConstantExpr) subscript.getIndex()).getValue();
+        if (!Integer.valueOf(optimization.arrayElementIndex).equals(constantValue)) {
+            return false;
+        }
+
+        optimization.elements.add(assign.getRightValue());
+        if (++optimization.arrayElementIndex == optimization.arraySize) {
+            applyArrayOptimization(optimization);
+            return true;
+        }
+        return false;
+    }
+
+    private void applyArrayOptimization(ArrayOptimization optimization) {
+        AssignmentStatement assign = (AssignmentStatement) resultSequence.get(optimization.index);
+        ArrayFromDataExpr arrayFromData = new ArrayFromDataExpr();
+        arrayFromData.setLocation(optimization.array.getLocation());
+        arrayFromData.setType(optimization.array.getType());
+        arrayFromData.getData().addAll(optimization.elements);
+        assign.setRightValue(arrayFromData);
+        readFrequencies[optimization.arrayVariable]--;
+        resultSequence.subList(optimization.index + 1, resultSequence.size()).clear();
     }
 
     private void wieldTryCatch(List<Statement> statements) {
@@ -642,6 +813,29 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
             return firstBreak.getTarget() == secondBreak.getTarget();
         }
         return false;
+    }
+
+    private static boolean matchArrayType(ValueType type, ArrayType arrayType) {
+        switch (arrayType) {
+            case BYTE:
+                return type == ValueType.BYTE || type == ValueType.BOOLEAN;
+            case SHORT:
+                return type == ValueType.SHORT;
+            case CHAR:
+                return type == ValueType.CHARACTER;
+            case INT:
+                return type == ValueType.INTEGER;
+            case LONG:
+                return type == ValueType.LONG;
+            case FLOAT:
+                return type == ValueType.FLOAT;
+            case DOUBLE:
+                return type == ValueType.DOUBLE;
+            case OBJECT:
+                return type instanceof ValueType.Object || type instanceof ValueType.Array;
+            default:
+                return false;
+        }
     }
 
     private void eliminateRedundantBreaks(List<Statement> statements, IdentifiedStatement exit) {
@@ -765,6 +959,9 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
 
     private void normalizeConditional(ConditionalStatement stmt) {
         if (stmt.getConsequent().isEmpty()) {
+            if (stmt.getAlternative().isEmpty()) {
+                return;
+            }
             stmt.getConsequent().addAll(stmt.getAlternative());
             stmt.getAlternative().clear();
             stmt.setCondition(ExprOptimizer.invert(stmt.getCondition()));
@@ -1036,6 +1233,28 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
         }
     }
 
+    @Override
+    public void visit(BoundCheckExpr expr) {
+        pushLocation(expr.getLocation());
+        try {
+            expr.getIndex().acceptVisitor(this);
+            Expr index = resultExpr;
+
+            Expr array = null;
+            if (expr.getArray() != null) {
+                expr.getArray().acceptVisitor(this);
+                array = resultExpr;
+            }
+
+            expr.setIndex(index);
+            expr.setArray(array);
+
+            resultExpr = expr;
+        } finally {
+            popLocation();
+        }
+    }
+
     private Statement addBarrier() {
         SequentialStatement barrier = new SequentialStatement();
         resultSequence.add(barrier);
@@ -1095,5 +1314,16 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
             }
         }
         return expr;
+    }
+
+    static class ArrayOptimization {
+        int index;
+        NewArrayExpr array;
+        int arrayVariable;
+        UnwrapArrayExpr unwrappedArray;
+        int unwrappedArrayVariable;
+        int arrayElementIndex;
+        int arraySize;
+        List<Expr> elements = new ArrayList<>();
     }
 }

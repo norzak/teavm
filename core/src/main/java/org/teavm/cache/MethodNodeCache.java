@@ -17,13 +17,12 @@ package org.teavm.cache;
 
 import java.util.function.Supplier;
 import org.teavm.ast.AsyncMethodNode;
-import org.teavm.ast.RegularMethodNode;
 import org.teavm.model.MethodReference;
 
 public interface MethodNodeCache {
-    RegularMethodNode get(MethodReference methodReference, CacheStatus cacheStatus);
+    AstCacheEntry get(MethodReference methodReference, CacheStatus cacheStatus);
 
-    void store(MethodReference methodReference, RegularMethodNode node, Supplier<String[]> dependencies);
+    void store(MethodReference methodReference, AstCacheEntry entry, Supplier<String[]> dependencies);
 
     AsyncMethodNode getAsync(MethodReference methodReference, CacheStatus cacheStatus);
 

@@ -42,6 +42,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -69,16 +70,23 @@ import org.eclipse.jetty.websocket.servlet.WebSocketServletFactory;
 import org.teavm.backend.javascript.JavaScriptTarget;
 import org.teavm.cache.InMemoryMethodNodeCache;
 import org.teavm.cache.InMemoryProgramCache;
+import org.teavm.cache.InMemorySymbolTable;
 import org.teavm.cache.MemoryCachedClassReaderSource;
 import org.teavm.debugging.information.DebugInformation;
 import org.teavm.debugging.information.DebugInformationBuilder;
 import org.teavm.dependency.FastDependencyAnalyzer;
+import org.teavm.model.ClassHolder;
 import org.teavm.model.ClassReader;
+import org.teavm.model.ClassReaderSource;
 import org.teavm.model.PreOptimizingClassHolderSource;
-import org.teavm.parsing.ClasspathClassHolderSource;
+import org.teavm.model.ReferenceCache;
+import org.teavm.parsing.ClasspathResourceMapper;
+import org.teavm.parsing.resource.ClasspathResourceReader;
+import org.teavm.parsing.resource.ResourceClassHolderMapper;
 import org.teavm.tooling.EmptyTeaVMToolLog;
 import org.teavm.tooling.TeaVMProblemRenderer;
 import org.teavm.tooling.TeaVMToolLog;
+import org.teavm.tooling.builder.SimpleBuildResult;
 import org.teavm.tooling.util.FileSystemWatcher;
 import org.teavm.vm.MemoryBuildTarget;
 import org.teavm.vm.TeaVM;
@@ -136,10 +144,14 @@ public class CodeServlet extends HttpServlet {
     private List<DevServerListener> listeners = new ArrayList<>();
     private HttpClient httpClient;
     private WebSocketClient wsClient = new WebSocketClient();
+    private InMemorySymbolTable symbolTable = new InMemorySymbolTable();
+    private InMemorySymbolTable fileSymbolTable = new InMemorySymbolTable();
+    private InMemorySymbolTable variableSymbolTable = new InMemorySymbolTable();
+    private ReferenceCache referenceCache = new ReferenceCache();
 
     public CodeServlet(String mainClass, String[] classPath) {
         this.mainClass = mainClass;
-        this.classPath = classPath.clone();
+        this.classPath = classPath != null ? classPath.clone() : new String[0];
 
         httpClient = new HttpClient();
         httpClient.setFollowRedirects(false);
@@ -223,6 +235,8 @@ public class CodeServlet extends HttpServlet {
             astCache.invalidate();
             programCache.invalidate();
             classSource.invalidate();
+            symbolTable.invalidate();
+            fileSymbolTable.invalidate();
         }
     }
 
@@ -292,7 +306,7 @@ public class CodeServlet extends HttpServlet {
 
     @Override
     protected void service(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-        String path = req.getPathInfo();
+        String path = req.getRequestURI();
         if (path != null) {
             log.debug("Serving " + path);
             if (!path.startsWith("/")) {
@@ -324,7 +338,9 @@ public class CodeServlet extends HttpServlet {
                     if (fileContent != null) {
                         resp.setStatus(HttpServletResponse.SC_OK);
                         resp.setCharacterEncoding("UTF-8");
-                        resp.setContentType("text/plain");
+                        resp.setHeader("Access-Control-Allow-Origin", "*");
+                        resp.setContentType(chooseContentType(fileName));
+                        noCache(resp);
                         resp.getOutputStream().write(fileContent);
                         resp.getOutputStream().flush();
                         log.debug("File " + path + " served as generated file");
@@ -350,11 +366,24 @@ public class CodeServlet extends HttpServlet {
         resp.setStatus(HttpServletResponse.SC_NOT_FOUND);
     }
 
+    private String chooseContentType(String name) {
+        if (name.endsWith(".js")) {
+            return "application/javascript";
+        } else if (name.endsWith(".js.map")) {
+            return "application/json";
+        } else if (name.endsWith(".teavmdbg")) {
+            return "application/octet-stream";
+        } else {
+            return "text/plain";
+        }
+    }
+
     private void serveDeobfuscator(HttpServletResponse resp) throws IOException {
         ClassLoader loader = CodeServlet.class.getClassLoader();
         resp.setStatus(HttpServletResponse.SC_OK);
         resp.setCharacterEncoding("UTF-8");
-        resp.setContentType("text/plain");
+        resp.setContentType("application/javascript");
+        noCache(resp);
         try (InputStream input = loader.getResourceAsStream("teavm/devserver/deobfuscator.js")) {
             IOUtils.copy(input, resp.getOutputStream());
         }
@@ -416,8 +445,11 @@ public class CodeServlet extends HttpServlet {
             sent = true;
             resp.setStatus(response.getStatus());
 
+            int length = -1;
+            boolean isGzip = false;
             for (HttpField field : response.getHeaders()) {
-                if (field.getName().toLowerCase().equals("location")) {
+                String name = field.getName().toLowerCase();
+                if (name.equals("location")) {
                     String value = field.getValue();
                     if (value.startsWith(proxyUrl)) {
                         String relLocation = value.substring(proxyUrl.length());
@@ -425,7 +457,22 @@ public class CodeServlet extends HttpServlet {
                         continue;
                     }
                 }
+                if (name.equals("content-encoding")) {
+                    isGzip = true;
+                    continue;
+                } else if (name.equals("content-length")) {
+                    try {
+                        length = Integer.parseInt(field.getValue());
+                    } catch (NumberFormatException e) {
+                        // do nothing
+                    }
+                    continue;
+                }
                 resp.addHeader(field.getName(), field.getValue());
+            }
+
+            if (length > 0 && !isGzip) {
+                resp.addHeader("Content-Length", String.valueOf(length));
             }
         }
     }
@@ -582,6 +629,7 @@ public class CodeServlet extends HttpServlet {
             resp.setStatus(HttpServletResponse.SC_OK);
             resp.setCharacterEncoding("UTF-8");
             resp.setContentType("text/plain");
+            noCache(resp);
             IOUtils.copy(stream, resp.getOutputStream());
             resp.getOutputStream().flush();
             return true;
@@ -700,9 +748,14 @@ public class CodeServlet extends HttpServlet {
     private void initBuilder() throws IOException {
         watcher = new FileSystemWatcher(classPath);
 
-        classSource = new MemoryCachedClassReaderSource();
-        astCache = new InMemoryMethodNodeCache();
-        programCache = new InMemoryProgramCache();
+        classSource = createCachedSource();
+        astCache = new InMemoryMethodNodeCache(referenceCache, symbolTable, fileSymbolTable, variableSymbolTable);
+        programCache = new InMemoryProgramCache(referenceCache, symbolTable, fileSymbolTable, variableSymbolTable);
+    }
+
+    private MemoryCachedClassReaderSource createCachedSource() {
+        return new MemoryCachedClassReaderSource(referenceCache, symbolTable, fileSymbolTable,
+                variableSymbolTable);
     }
 
     private void shutdownBuilder() {
@@ -727,25 +780,33 @@ public class CodeServlet extends HttpServlet {
         fireBuildStarted();
         reportProgress(0);
 
-        DebugInformationBuilder debugInformationBuilder = new DebugInformationBuilder();
+        DebugInformationBuilder debugInformationBuilder = new DebugInformationBuilder(referenceCache);
         ClassLoader classLoader = initClassLoader();
-        classSource.setUnderlyingSource(new PreOptimizingClassHolderSource(
-                new ClasspathClassHolderSource(classLoader)));
+        ClasspathResourceReader reader = new ClasspathResourceReader(classLoader);
+        ResourceClassHolderMapper rawMapper = new ResourceClassHolderMapper(reader, referenceCache);
+        Function<String, ClassHolder> classPathMapper = new ClasspathResourceMapper(classLoader, referenceCache,
+                rawMapper);
+        classSource.setProvider(name -> PreOptimizingClassHolderSource.optimize(classPathMapper, name));
 
         long startTime = System.currentTimeMillis();
         JavaScriptTarget jsTarget = new JavaScriptTarget();
 
         TeaVM vm = new TeaVMBuilder(jsTarget)
+                .setReferenceCache(referenceCache)
                 .setClassLoader(classLoader)
                 .setClassSource(classSource)
                 .setDependencyAnalyzerFactory(FastDependencyAnalyzer::new)
+                .setClassSourcePacker(this::packClasses)
+                .setStrict(true)
+                .setObfuscated(false)
                 .build();
 
         jsTarget.setStackTraceIncluded(true);
-        jsTarget.setMinifying(false);
+        jsTarget.setObfuscated(false);
         jsTarget.setAstCache(astCache);
         jsTarget.setDebugEmitter(debugInformationBuilder);
-        jsTarget.setClassScoped(true);
+        jsTarget.setTopLevelNameLimit(2000);
+        jsTarget.setStrict(true);
         vm.setOptimizationLevel(TeaVMOptimizationLevel.SIMPLE);
         vm.setCacheStatus(classSource);
         vm.addVirtualMethods(m -> true);
@@ -764,6 +825,16 @@ public class CodeServlet extends HttpServlet {
         generateDebug(debugInformationBuilder);
 
         postBuild(vm, startTime);
+    }
+
+    private ClassReaderSource packClasses(ClassReaderSource source, Collection<? extends String> classNames) {
+        MemoryCachedClassReaderSource packedSource = createCachedSource();
+        packedSource.setProvider(source::get);
+        for (String className : classNames) {
+            packedSource.populate(className);
+        }
+        packedSource.setProvider(null);
+        return packedSource;
     }
 
     private void addIndicator() {
@@ -872,14 +943,15 @@ public class CodeServlet extends HttpServlet {
 
     private List<String> getChangedClasses(Collection<File> changedFiles) {
         List<String> result = new ArrayList<>();
+        String[] prefixes = Arrays.stream(classPath).map(s -> s.replace('\\', '/')).toArray(String[]::new);
 
         for (File file : changedFiles) {
-            String path = file.getPath();
+            String path = file.getPath().replace('\\', '/');
             if (!path.endsWith(".class")) {
                 continue;
             }
 
-            String prefix = Arrays.stream(classPath)
+            String prefix = Arrays.stream(prefixes)
                     .filter(path::startsWith)
                     .findFirst()
                     .orElse("");
@@ -961,7 +1033,7 @@ public class CodeServlet extends HttpServlet {
     }
 
     private void fireBuildComplete(TeaVM vm) {
-        CodeServletBuildResult result = new CodeServletBuildResult(vm, new ArrayList<>(buildTarget.getNames()));
+        SimpleBuildResult result = new SimpleBuildResult(vm, new ArrayList<>(buildTarget.getNames()));
         for (DevServerListener listener : listeners) {
             listener.compilationComplete(result);
         }
@@ -1040,5 +1112,9 @@ public class CodeServlet extends HttpServlet {
             path = "/" + path;
         }
         return path;
+    }
+
+    static void noCache(HttpServletResponse response) {
+        response.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     }
 }

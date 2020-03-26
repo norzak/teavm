@@ -55,10 +55,10 @@ public class ClassGenerator implements Generator, Injector, DependencyPlugin {
     public void generate(InjectorContext context, MethodReference methodRef) throws IOException {
         switch (methodRef.getName()) {
             case "newEmptyInstance":
-                context.getWriter().append("new ");
+                context.getWriter().append("new (");
                 context.writeExpr(context.getArgument(0), Precedence.MEMBER_ACCESS);
                 context.getWriter().append('.').appendField(platformClassField);
-                context.getWriter().append("()");
+                context.getWriter().append(")");
                 break;
         }
     }
@@ -147,11 +147,11 @@ public class ClassGenerator implements Generator, Injector, DependencyPlugin {
         writer.appendClass(className).append(".$meta.fields").ws().append('=').ws().append('[').indent();
 
         generateCreateMembers(writer, cls.getFields(), field -> {
-            appendProperty(writer, "type", false, () -> writer.append(context.typeToClassString(field.getType())));
+            appendProperty(writer, "type", false, () -> context.typeToClassString(writer, field.getType()));
 
             appendProperty(writer, "getter", false, () -> {
                 if (accessibleFields != null && accessibleFields.contains(field.getName())) {
-                    renderGetter(writer, field);
+                    renderGetter(context, writer, field);
                 } else {
                     writer.append("null");
                 }
@@ -159,7 +159,7 @@ public class ClassGenerator implements Generator, Injector, DependencyPlugin {
 
             appendProperty(writer, "setter", false, () -> {
                 if (accessibleFields != null && accessibleFields.contains(field.getName())) {
-                    renderSetter(writer, field);
+                    renderSetter(context, writer, field);
                 } else {
                     writer.append("null");
                 }
@@ -188,18 +188,18 @@ public class ClassGenerator implements Generator, Injector, DependencyPlugin {
                     if (i > 0) {
                         writer.append(',').ws();
                     }
-                    writer.append(context.typeToClassString(method.parameterType(i)));
+                    context.typeToClassString(writer, method.parameterType(i));
                 }
                 writer.append(']');
             });
 
             appendProperty(writer, "returnType", false, () -> {
-                writer.append(context.typeToClassString(method.getResultType()));
+                context.typeToClassString(writer, method.getResultType());
             });
 
             appendProperty(writer, "callable", false, () -> {
                 if (accessibleMethods != null && accessibleMethods.contains(method.getDescriptor())) {
-                    renderCallable(writer, method);
+                    renderCallable(context, writer, method);
                 } else {
                     writer.append("null");
                 }
@@ -239,18 +239,18 @@ public class ClassGenerator implements Generator, Injector, DependencyPlugin {
         value.render();
     }
 
-    private void renderGetter(SourceWriter writer, FieldReader field) throws IOException {
+    private void renderGetter(GeneratorContext context, SourceWriter writer, FieldReader field) throws IOException {
         writer.append("function(obj)").ws().append("{").indent().softNewLine();
-        initClass(writer, field);
+        initClass(context, writer, field);
         writer.append("return ");
         boxIfNecessary(writer, field.getType(), () -> fieldAccess(writer, field));
         writer.append(";").softNewLine();
         writer.outdent().append("}");
     }
 
-    private void renderSetter(SourceWriter writer, FieldReader field) throws IOException {
+    private void renderSetter(GeneratorContext context, SourceWriter writer, FieldReader field) throws IOException {
         writer.append("function(obj,").ws().append("val)").ws().append("{").indent().softNewLine();
-        initClass(writer, field);
+        initClass(context, writer, field);
         fieldAccess(writer, field);
         writer.ws().append('=').ws();
         unboxIfNecessary(writer, field.getType(), () -> writer.append("val"));
@@ -258,10 +258,10 @@ public class ClassGenerator implements Generator, Injector, DependencyPlugin {
         writer.outdent().append("}");
     }
 
-    private void renderCallable(SourceWriter writer, MethodReader method) throws IOException {
+    private void renderCallable(GeneratorContext context, SourceWriter writer, MethodReader method) throws IOException {
         writer.append("function(obj,").ws().append("args)").ws().append("{").indent().softNewLine();
 
-        initClass(writer, method);
+        initClass(context, writer, method);
 
         if (method.getResultType() != ValueType.VOID) {
             writer.append("return ");
@@ -290,8 +290,8 @@ public class ClassGenerator implements Generator, Injector, DependencyPlugin {
         writer.outdent().append("}");
     }
 
-    private void initClass(SourceWriter writer, MemberReader member) throws IOException {
-        if (member.hasModifier(ElementModifier.STATIC)) {
+    private void initClass(GeneratorContext context, SourceWriter writer, MemberReader member) throws IOException {
+        if (member.hasModifier(ElementModifier.STATIC) && context.isDynamicInitializer(member.getOwnerName())) {
             writer.appendClassInit(member.getOwnerName()).append("();").softNewLine();
         }
     }

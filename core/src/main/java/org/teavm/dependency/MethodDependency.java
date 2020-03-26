@@ -20,7 +20,6 @@ import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import org.teavm.callgraph.DefaultCallGraphNode;
 import org.teavm.model.CallLocation;
 import org.teavm.model.MethodHolder;
 import org.teavm.model.MethodReader;
@@ -33,12 +32,14 @@ public class MethodDependency implements MethodDependencyInfo {
     DependencyNode resultNode;
     DependencyNode thrown;
     MethodHolder method;
+    boolean present;
     private MethodReference reference;
     boolean used;
+    boolean external;
     DependencyPlugin dependencyPlugin;
     boolean dependencyPluginAttached;
-    private List<LocationListener> locationListeners;
-    private Set<CallLocation> locations;
+    List<LocationListener> locationListeners;
+    Set<CallLocation> locations;
     boolean activated;
 
     MethodDependency(DependencyAnalyzer dependencyAnalyzer, DependencyNode[] variableNodes, int parameterCount,
@@ -101,7 +102,7 @@ public class MethodDependency implements MethodDependencyInfo {
 
     @Override
     public boolean isMissing() {
-        return method == null;
+        return method == null && !present;
     }
 
     @Override
@@ -110,12 +111,21 @@ public class MethodDependency implements MethodDependencyInfo {
     }
 
     public MethodDependency addLocation(CallLocation location) {
+        return addLocation(location, true);
+    }
+
+    MethodDependency addLocation(CallLocation location, boolean addCallSite) {
         DefaultCallGraphNode node = dependencyAnalyzer.callGraph.getNode(location.getMethod());
         if (locations == null) {
             locations = new LinkedHashSet<>();
         }
         if (locations.add(location)) {
-            node.addCallSite(reference, location.getSourceLocation());
+            if (addCallSite) {
+                DefaultCallSite callSite = node.addCallSite(reference);
+                if (location.getSourceLocation() != null) {
+                    callSite.addLocation(node, location.getSourceLocation());
+                }
+            }
             if (locationListeners != null) {
                 for (LocationListener listener : locationListeners.toArray(new LocationListener[0])) {
                     listener.locationAdded(location);
@@ -151,11 +161,31 @@ public class MethodDependency implements MethodDependencyInfo {
     }
 
     public void use() {
+        use(true);
+    }
+
+    void use(boolean external) {
         if (!used) {
             used = true;
             if (!isMissing()) {
                 dependencyAnalyzer.scheduleMethodAnalysis(this);
             }
+        }
+        if (external) {
+            this.external = true;
+        }
+    }
+
+    @Override
+    public boolean isCalled() {
+        return external;
+    }
+
+
+    void cleanup() {
+        if (method != null) {
+            present = true;
+            method = null;
         }
     }
 }

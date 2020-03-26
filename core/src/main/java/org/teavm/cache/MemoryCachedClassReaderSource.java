@@ -1,5 +1,5 @@
 /*
- *  Copyright 2018 Alexey Andreev.
+ *  Copyright 2019 Alexey Andreev.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -15,23 +15,33 @@
  */
 package org.teavm.cache;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import org.teavm.model.ClassReader;
 import org.teavm.model.ClassReaderSource;
 import org.teavm.model.MethodReference;
+import org.teavm.model.ReferenceCache;
 
 public class MemoryCachedClassReaderSource implements ClassReaderSource, CacheStatus {
-    private ClassReaderSource underlyingSource;
-    private final Map<String, Optional<ClassReader>> cache = new HashMap<>();
+    private Map<String, Entry> cache = new HashMap<>();
+    private Function<String, ClassReader> provider;
+    private ClassIO classIO;
     private final Set<String> freshClasses = new HashSet<>();
 
-    public void setUnderlyingSource(ClassReaderSource underlyingSource) {
-        this.underlyingSource = underlyingSource;
+    public MemoryCachedClassReaderSource(ReferenceCache referenceCache, SymbolTable symbolTable,
+            SymbolTable fileTable, SymbolTable varTable) {
+        classIO = new ClassIO(referenceCache, symbolTable, fileTable, varTable);
+    }
+
+    public void setProvider(Function<String, ClassReader> provider) {
+        this.provider = provider;
     }
 
     @Override
@@ -44,14 +54,45 @@ public class MemoryCachedClassReaderSource implements ClassReaderSource, CacheSt
         return isStaleClass(method.getClassName());
     }
 
+    public void populate(String name) {
+        getEntry(name);
+    }
+
     @Override
     public ClassReader get(String name) {
-        return cache.computeIfAbsent(name, key -> {
-            if (underlyingSource == null) {
-                return Optional.empty();
+        Entry entry = getEntry(name);
+        if (entry.data == null) {
+            return null;
+        }
+
+        ClassReader cls = entry.reader;
+        if (cls == null) {
+            ByteArrayInputStream input = new ByteArrayInputStream(entry.data);
+            try {
+                cls = classIO.readClass(input, name);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
             }
-            return Optional.ofNullable(underlyingSource.get(key));
-        }).orElse(null);
+            entry.reader = cls;
+        }
+        return cls;
+    }
+
+    private Entry getEntry(String name) {
+        return cache.computeIfAbsent(name, className -> {
+            ClassReader cls = provider != null ? provider.apply(className) : null;
+            Entry en = new Entry();
+            if (cls != null) {
+                ByteArrayOutputStream output = new ByteArrayOutputStream();
+                try {
+                    classIO.writeClass(output, cls);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+                en.data = output.toByteArray();
+            }
+            return en;
+        });
     }
 
     public void commit() {
@@ -66,5 +107,10 @@ public class MemoryCachedClassReaderSource implements ClassReaderSource, CacheSt
     public void invalidate() {
         cache.clear();
         freshClasses.clear();
+    }
+
+    static class Entry {
+        byte[] data;
+        ClassReader reader;
     }
 }

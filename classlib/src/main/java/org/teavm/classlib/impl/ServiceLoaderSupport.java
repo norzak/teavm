@@ -41,11 +41,11 @@ import org.teavm.dependency.MethodDependency;
 import org.teavm.model.CallLocation;
 import org.teavm.model.MethodDescriptor;
 import org.teavm.model.MethodReference;
-import org.teavm.model.ValueType;
 
 public class ServiceLoaderSupport extends AbstractDependencyListener implements Generator {
     private static final MethodReference LOAD_METHOD = new MethodReference(ServiceLoader.class, "load", Class.class,
             ServiceLoader.class);
+    private static final MethodDescriptor INIT_METHOD = new MethodDescriptor("<init>", void.class);
     private Map<String, List<String>> serviceMap = new HashMap<>();
     private ClassLoader classLoader;
 
@@ -61,14 +61,15 @@ public class ServiceLoaderSupport extends AbstractDependencyListener implements 
         for (Map.Entry<String, List<String>> entry : serviceMap.entrySet()) {
             writer.appendClass(entry.getKey()).append(".$$serviceList$$ = [");
             List<String> implementations = entry.getValue();
-            for (int i = 0; i < implementations.size(); ++i) {
-                if (i > 0) {
-                    writer.append(", ");
-                }
-                String implName = implementations.get(i);
+            boolean first = true;
+            for (String implName : implementations) {
                 if (context.getClassSource().getClassNames().contains(implName)) {
+                    if (!first) {
+                        writer.append(", ");
+                    }
+                    first = false;
                     writer.append("[").appendClass(implName).append(", ").appendMethodBody(
-                            new MethodReference(implName, new MethodDescriptor("<init>", ValueType.VOID)))
+                            new MethodReference(implName, INIT_METHOD))
                             .append("]");
                 }
             }
@@ -105,8 +106,7 @@ public class ServiceLoaderSupport extends AbstractDependencyListener implements 
                     }
                     serviceMap.computeIfAbsent(type.getName(), k -> new ArrayList<>()).add(implementationType);
 
-                    MethodReference ctor = new MethodReference(implementationType,
-                            new MethodDescriptor("<init>", ValueType.VOID));
+                    MethodReference ctor = new MethodReference(implementationType, INIT_METHOD);
                     agent.linkMethod(ctor).addLocation(location).use();
                     method.getResult().getArrayItem().propagate(agent.getType(implementationType));
                 }

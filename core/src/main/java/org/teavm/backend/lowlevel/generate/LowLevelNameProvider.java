@@ -19,27 +19,20 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
-import org.teavm.interop.Export;
-import org.teavm.interop.Import;
-import org.teavm.model.AnnotationReader;
-import org.teavm.model.ClassReaderSource;
 import org.teavm.model.FieldReference;
-import org.teavm.model.MethodReader;
+import org.teavm.model.MethodDescriptor;
 import org.teavm.model.MethodReference;
 import org.teavm.model.ValueType;
 
-public abstract class LowLevelNameProvider {
-    private ClassReaderSource classSource;
-
+public abstract class LowLevelNameProvider implements NameProvider {
     protected Set<String> occupiedTopLevelNames = new HashSet<>();
-    protected Map<String, Set<String>> occupiedVtableNames = new HashMap<>();
+    protected Set<String> occupiedVtableNames = new HashSet<>();
     protected Map<String, Set<String>> occupiedClassNames = new HashMap<>();
 
     protected Map<MethodReference, String> methodNames = new HashMap<>();
-    protected Map<MethodReference, String> virtualMethodNames = new HashMap<>();
+    protected Map<MethodDescriptor, String> virtualMethodNames = new HashMap<>();
 
     protected Map<FieldReference, String> staticFieldNames = new HashMap<>();
     protected Map<FieldReference, String> memberFieldNames = new HashMap<>();
@@ -47,53 +40,27 @@ public abstract class LowLevelNameProvider {
     protected Map<String, String> classNames = new HashMap<>();
     protected Map<String, String> classInitializerNames = new HashMap<>();
     protected Map<String, String> classClassNames = new HashMap<>();
+    protected Map<ValueType, String> classSystemInitializerNames = new HashMap<>();
     protected Map<ValueType, String> classInstanceNames = new HashMap<>();
     protected Map<ValueType, String> supertypeNames = new HashMap<>();
 
-    private Set<ValueType> types = new LinkedHashSet<>();
-
-    public LowLevelNameProvider(ClassReaderSource classSource) {
-        this.classSource = classSource;
-    }
-
+    @Override
     public String forMethod(MethodReference method) {
-        return methodNames.computeIfAbsent(method, k -> {
-            String specialName = getSpecialName(k);
-            return specialName == null ? pickUnoccupied("meth_" + suggestForMethod(k)) : specialName;
-        });
+        return methodNames.computeIfAbsent(method, k -> pickUnoccupied("meth_" + suggestForMethod(k)));
     }
 
-    public String forVirtualMethod(MethodReference method) {
-        return virtualMethodNames.computeIfAbsent(method, k -> {
-            Set<String> occupied = occupiedVtableNames.computeIfAbsent(k.getClassName(),
-                    c -> new HashSet<>(Arrays.asList("parent")));
-            return pickUnoccupied("virt_" + k.getName(), occupied);
-        });
+    @Override
+    public String forVirtualMethod(MethodDescriptor method) {
+        return virtualMethodNames.computeIfAbsent(method,
+                k -> pickUnoccupied("virt_" + sanitize(k.getName()), occupiedVtableNames));
     }
 
-    private String getSpecialName(MethodReference methodReference) {
-        MethodReader method = classSource.resolve(methodReference);
-        if (method == null) {
-            return null;
-        }
-
-        AnnotationReader exportAnnot = method.getAnnotations().get(Export.class.getName());
-        if (exportAnnot != null) {
-            return exportAnnot.getValue("name").getString();
-        }
-
-        AnnotationReader importAnnot = method.getAnnotations().get(Import.class.getName());
-        if (importAnnot != null) {
-            return importAnnot.getValue("name").getString();
-        }
-
-        return null;
-    }
-
+    @Override
     public String forStaticField(FieldReference field) {
         return staticFieldNames.computeIfAbsent(field, k -> pickUnoccupied("sfld_" + suggestForStaticField(k)));
     }
 
+    @Override
     public String forMemberField(FieldReference field) {
         return memberFieldNames.computeIfAbsent(field, k -> {
             Set<String> occupied = occupiedClassNames.computeIfAbsent(k.getClassName(),
@@ -102,24 +69,33 @@ public abstract class LowLevelNameProvider {
         });
     }
 
+    @Override
     public String forClass(String className) {
         return classNames.computeIfAbsent(className, k -> pickUnoccupied("cls_" + suggestForClass(k)));
     }
 
+    @Override
     public String forClassInitializer(String className) {
         return classInitializerNames.computeIfAbsent(className, k -> pickUnoccupied("initclass_" + suggestForClass(k)));
     }
 
+    @Override
+    public String forClassSystemInitializer(ValueType type) {
+        return classSystemInitializerNames.computeIfAbsent(type, k -> pickUnoccupied("sysinitclass_"
+                + suggestForType(k)));
+    }
+
+    @Override
     public String forClassClass(String className) {
-        types.add(ValueType.object(className));
         return classClassNames.computeIfAbsent(className, k -> pickUnoccupied(suggestForClass(k) + "_VT"));
     }
 
+    @Override
     public String forClassInstance(ValueType type) {
-        types.add(type);
         return classInstanceNames.computeIfAbsent(type, k -> pickUnoccupied(suggestForType(k) + "_Cls"));
     }
 
+    @Override
     public String forSupertypeFunction(ValueType type) {
         return supertypeNames.computeIfAbsent(type, k -> pickUnoccupied("supertypeof_" + suggestForType(k)));
     }
@@ -213,10 +189,6 @@ public abstract class LowLevelNameProvider {
         }
 
         return result;
-    }
-
-    public Set<? extends ValueType> getTypes() {
-        return types;
     }
 
     protected Set<? extends String> getKeywords() {

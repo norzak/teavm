@@ -17,6 +17,7 @@ package org.teavm.classlib.java.lang;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -290,4 +291,33 @@ public class StringTest {
     public void internsConstants() {
         assertSame("abc", ("a" + "bc").intern());
     }
+
+    @Test
+    public void joinStrings() {
+        String str = String.join("/", "a", "b");
+        assertEquals(3, str.length());
+        assertEquals("a/b", str);
+    }
+
+    @Test
+    public void joinSingleString() {
+        String str = String.join("/", "a");
+        assertEquals(1, str.length());
+        assertEquals("a", str);
+    }
+
+    @Test
+    public void joinNoStrings() {
+        String str = String.join("/");
+        assertEquals(0, str.length());
+        assertEquals("", str);
+    }
+    
+    @Test
+    public void testIsBlank() {
+        assertTrue(new String(new char[0]).isBlank());
+        assertTrue(new String(new char[] { ' ', ' ' }).isBlank());
+        assertFalse(new String(new char[] { ' ', 'x', ' ' }).isBlank());
+        assertFalse(new String(new char[] { 'a', ' ' }).isBlank());
+    }    
 }

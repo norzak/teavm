@@ -21,7 +21,7 @@
   <parent>
     <artifactId>teavm-idea-parent</artifactId>
     <groupId>org.teavm</groupId>
-    <version>0.6.0-SNAPSHOT</version>
+    <version>0.7.0-SNAPSHOT</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
   <modelVersion>4.0.0</modelVersion>
@@ -84,6 +84,18 @@
     </dependency>
     <dependency>
       <groupId>org.teavm.idea</groupId>
+      <artifactId>platform-api</artifactId>
+      <version>${idea.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.teavm.idea</groupId>
+      <artifactId>platform-impl</artifactId>
+      <version>${idea.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.teavm.idea</groupId>
       <artifactId>commons-logging</artifactId>
       <version>${idea.version}</version>
       <scope>provided</scope>
@@ -92,6 +104,20 @@
       <groupId>org.teavm.idea</groupId>
       <artifactId>teavm</artifactId>
       <version>${project.version}</version>
+    </dependency>
+
+
+    <dependency>
+      <groupId>org.teavm.idea</groupId>
+      <artifactId>java-api</artifactId>
+      <version>${idea.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.teavm.idea</groupId>
+      <artifactId>java-impl</artifactId>
+      <version>${idea.version}</version>
+      <scope>provided</scope>
     </dependency>
 
     <dependency>
@@ -118,6 +144,13 @@
       <artifactId>teavm-jps-plugin</artifactId>
       <version>${project.version}</version>
       <scope>runtime</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.jetbrains.kotlin</groupId>
+      <artifactId>kotlin-stdlib</artifactId>
+      <version>1.3.61</version>
+      <scope>provided</scope>
     </dependency>
 
   </dependencies>

@@ -15,22 +15,33 @@
  */
 package org.teavm.cache;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Supplier;
 import org.teavm.ast.AsyncMethodNode;
+import org.teavm.ast.ControlFlowEntry;
 import org.teavm.ast.RegularMethodNode;
 import org.teavm.model.MethodReference;
+import org.teavm.model.ReferenceCache;
 
 public class InMemoryMethodNodeCache implements MethodNodeCache {
     private Map<MethodReference, RegularItem> cache = new HashMap<>();
     private Map<MethodReference, RegularItem> newItems = new HashMap<>();
     private Map<MethodReference, AsyncItem> asyncCache = new HashMap<>();
     private Map<MethodReference, AsyncItem> newAsyncItems = new HashMap<>();
+    private AstIO io;
+
+    public InMemoryMethodNodeCache(ReferenceCache referenceCache, InMemorySymbolTable symbolTable,
+            InMemorySymbolTable fileSymbolTable, InMemorySymbolTable variableSymbolTable) {
+        io = new AstIO(referenceCache, symbolTable, fileSymbolTable, variableSymbolTable);
+    }
 
     @Override
-    public RegularMethodNode get(MethodReference methodReference, CacheStatus cacheStatus) {
+    public AstCacheEntry get(MethodReference methodReference, CacheStatus cacheStatus) {
         RegularItem item = cache.get(methodReference);
         if (item == null) {
             return null;
@@ -40,12 +51,19 @@ public class InMemoryMethodNodeCache implements MethodNodeCache {
             return null;
         }
 
-        return item.node;
+        VarDataInput input = new VarDataInput(new ByteArrayInputStream(item.entry));
+        try {
+            ControlFlowEntry[] cfg = io.readControlFlow(input);
+            RegularMethodNode ast = io.read(input, methodReference);
+            return new AstCacheEntry(ast, cfg);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
-    public void store(MethodReference methodReference, RegularMethodNode node, Supplier<String[]> dependencies) {
-        newItems.put(methodReference, new RegularItem(node, dependencies.get().clone()));
+    public void store(MethodReference methodReference, AstCacheEntry entry, Supplier<String[]> dependencies) {
+        newItems.put(methodReference, new RegularItem(entry, dependencies.get().clone()));
     }
 
     @Override
@@ -59,7 +77,12 @@ public class InMemoryMethodNodeCache implements MethodNodeCache {
             return null;
         }
 
-        return item.node;
+        VarDataInput input = new VarDataInput(new ByteArrayInputStream(item.node));
+        try {
+            return io.readAsync(input, methodReference);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
@@ -86,22 +109,37 @@ public class InMemoryMethodNodeCache implements MethodNodeCache {
         newAsyncItems.clear();
     }
 
-    static final class RegularItem {
-        final RegularMethodNode node;
+    final class RegularItem {
+        final byte[] entry;
         final String[] dependencies;
 
-        RegularItem(RegularMethodNode node, String[] dependencies) {
-            this.node = node;
+        RegularItem(AstCacheEntry entry, String[] dependencies) {
+            try {
+                ByteArrayOutputStream output = new ByteArrayOutputStream();
+                VarDataOutput data = new VarDataOutput(output);
+                io.write(data, entry.cfg);
+                io.write(data, entry.method);
+                this.entry = output.toByteArray();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
             this.dependencies = dependencies;
         }
     }
 
-    static final class AsyncItem {
-        final AsyncMethodNode node;
+    final class AsyncItem {
+        final byte[] node;
         final String[] dependencies;
 
         AsyncItem(AsyncMethodNode node, String[] dependencies) {
-            this.node = node;
+            try {
+                ByteArrayOutputStream output = new ByteArrayOutputStream();
+                VarDataOutput data = new VarDataOutput(output);
+                io.writeAsync(data, node);
+                this.node = output.toByteArray();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
             this.dependencies = dependencies;
         }
     }

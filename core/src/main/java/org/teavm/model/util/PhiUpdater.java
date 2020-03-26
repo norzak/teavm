@@ -42,10 +42,12 @@ import org.teavm.model.Program;
 import org.teavm.model.Sigma;
 import org.teavm.model.TryCatchBlock;
 import org.teavm.model.Variable;
+import org.teavm.model.instructions.AbstractInstructionVisitor;
 import org.teavm.model.instructions.ArrayLengthInstruction;
 import org.teavm.model.instructions.AssignInstruction;
 import org.teavm.model.instructions.BinaryBranchingInstruction;
 import org.teavm.model.instructions.BinaryInstruction;
+import org.teavm.model.instructions.BoundCheckInstruction;
 import org.teavm.model.instructions.BranchingInstruction;
 import org.teavm.model.instructions.CastInstruction;
 import org.teavm.model.instructions.CastIntegerInstruction;
@@ -56,17 +58,14 @@ import org.teavm.model.instructions.ConstructArrayInstruction;
 import org.teavm.model.instructions.ConstructInstruction;
 import org.teavm.model.instructions.ConstructMultiArrayInstruction;
 import org.teavm.model.instructions.DoubleConstantInstruction;
-import org.teavm.model.instructions.EmptyInstruction;
 import org.teavm.model.instructions.ExitInstruction;
 import org.teavm.model.instructions.FloatConstantInstruction;
 import org.teavm.model.instructions.GetElementInstruction;
 import org.teavm.model.instructions.GetFieldInstruction;
-import org.teavm.model.instructions.InitClassInstruction;
 import org.teavm.model.instructions.InstructionVisitor;
 import org.teavm.model.instructions.IntegerConstantInstruction;
 import org.teavm.model.instructions.InvokeInstruction;
 import org.teavm.model.instructions.IsInstanceInstruction;
-import org.teavm.model.instructions.JumpInstruction;
 import org.teavm.model.instructions.LongConstantInstruction;
 import org.teavm.model.instructions.MonitorEnterInstruction;
 import org.teavm.model.instructions.MonitorExitInstruction;
@@ -100,6 +99,7 @@ public class PhiUpdater {
     private List<Phi> synthesizedPhis = new ArrayList<>();
     private Sigma[][] sigmas;
     private Predicate<Instruction> sigmaPredicate = instruction -> false;
+    private int[][][] frontierVariableCache;
 
     public int getSourceVariable(int var) {
         if (var >= variableToSourceMap.size()) {
@@ -133,6 +133,7 @@ public class PhiUpdater {
         if (program.basicBlockCount() == 0) {
             return;
         }
+        frontierVariableCache = new int[program.basicBlockCount()][][];
         this.program = program;
         phisByReceiver.clear();
         cfg = ProgramUtils.buildControlFlowGraph(program);
@@ -473,17 +474,52 @@ public class PhiUpdater {
         }
     }
 
+    private int[][] getIncomingVariablesForFrontier(int frontier) {
+        int[][] result = frontierVariableCache[frontier];
+        if (result == null) {
+            List<List<Variable>> builder = new ArrayList<>(Collections.nCopies(program.basicBlockCount(), null));
+            for (Phi phi : program.basicBlockAt(frontier).getPhis()) {
+                for (Incoming incoming : phi.getIncomings()) {
+                    List<Variable> variables = builder.get(incoming.getSource().getIndex());
+                    if (variables == null) {
+                        variables = new ArrayList<>();
+                        builder.set(incoming.getSource().getIndex(), variables);
+                    }
+                    variables.add(incoming.getValue());
+                }
+            }
+
+            result = new int[program.basicBlockCount()][];
+            for (int i = 0; i < result.length; ++i) {
+                List<Variable> builderVariables = builder.get(i);
+                if (builderVariables == null) {
+                    continue;
+                }
+                int[] resultVariables = new int[builderVariables.size()];
+                for (int j = 0; j < resultVariables.length; ++j) {
+                    resultVariables[j] = builderVariables.get(j).getIndex();
+                }
+                result[i] = resultVariables;
+            }
+
+            frontierVariableCache[frontier] = result;
+        }
+        return result;
+    }
+
     private void placePhi(int frontier, Variable var, BasicBlock block, Deque<BasicBlock> worklist) {
         BasicBlock frontierBlock = program.basicBlockAt(frontier);
         if (frontierBlock.getExceptionVariable() == var) {
             return;
         }
 
-        boolean exists = frontierBlock.getPhis().stream()
-                .flatMap(phi -> phi.getIncomings().stream())
-                .anyMatch(incoming -> incoming.getSource() == block && incoming.getValue() == var);
-        if (exists) {
-            return;
+        int[] frontierIncomingVariables = getIncomingVariablesForFrontier(frontier)[block.getIndex()];
+        if (frontierIncomingVariables != null) {
+            for (int incoming : frontierIncomingVariables) {
+                if (incoming == var.getIndex()) {
+                    return;
+                }
+            }
         }
 
         Phi phi = phiMap[frontier][var.getIndex()];
@@ -543,11 +579,7 @@ public class PhiUpdater {
         return mappedVar;
     }
 
-    private InstructionVisitor consumer = new InstructionVisitor() {
-        @Override
-        public void visit(EmptyInstruction insn) {
-        }
-
+    private InstructionVisitor consumer = new AbstractInstructionVisitor() {
         @Override
         public void visit(ClassConstantInstruction insn) {
             insn.setReceiver(define(insn.getReceiver()));
@@ -612,11 +644,6 @@ public class PhiUpdater {
             insn.setFirstOperand(use(insn.getFirstOperand()));
             insn.setSecondOperand(use(insn.getSecondOperand()));
         }
-
-        @Override
-        public void visit(JumpInstruction insn) {
-        }
-
         @Override
         public void visit(SwitchInstruction insn) {
             insn.setCondition(use(insn.getCondition()));
@@ -752,10 +779,6 @@ public class PhiUpdater {
         }
 
         @Override
-        public void visit(InitClassInstruction insn) {
-        }
-
-        @Override
         public void visit(NullCheckInstruction insn) {
             insn.setValue(use(insn.getValue()));
             insn.setReceiver(define(insn.getReceiver()));
@@ -769,6 +792,15 @@ public class PhiUpdater {
         @Override
         public void visit(MonitorExitInstruction insn) {
             insn.setObjectRef(use(insn.getObjectRef()));
+        }
+
+        @Override
+        public void visit(BoundCheckInstruction insn) {
+            insn.setIndex(use(insn.getIndex()));
+            if (insn.getArray() != null) {
+                insn.setArray(use(insn.getArray()));
+            }
+            insn.setReceiver(define(insn.getReceiver()));
         }
     };
 }

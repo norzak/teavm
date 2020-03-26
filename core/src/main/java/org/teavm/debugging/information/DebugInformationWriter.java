@@ -42,10 +42,13 @@ class DebugInformationWriter {
         writeStringArray(debugInfo.variableNames);
         writeExactMethods(debugInfo.exactMethods);
 
-        writeMapping(debugInfo.fileMapping);
-        writeMapping(debugInfo.lineMapping);
-        writeMapping(debugInfo.classMapping);
-        writeMapping(debugInfo.methodMapping);
+        output.write(debugInfo.layers.length);
+        for (DebugInformation.Layer layer : debugInfo.layers) {
+            writeMapping(layer.fileMapping);
+            writeMapping(layer.lineMapping);
+            writeMapping(layer.classMapping);
+            writeMapping(layer.methodMapping);
+        }
         writeLinesAndColumns(debugInfo.statementStartMapping);
         writeCallSiteMapping(debugInfo.callSiteMapping);
         writeVariableMappings(debugInfo);
@@ -209,6 +212,10 @@ class DebugInformationWriter {
     }
 
     private void writeCFG(RecordArray mapping) throws IOException {
+        if (mapping == null) {
+            writeUnsignedNumber(0);
+            return;
+        }
         writeUnsignedNumber(mapping.size());
         writeRle(mapping.cut(0));
         IntegerArray sizes = new IntegerArray(1);

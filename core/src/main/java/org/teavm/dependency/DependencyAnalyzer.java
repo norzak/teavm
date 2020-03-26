@@ -33,14 +33,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
+import java.util.function.Function;
 import org.objectweb.asm.tree.ClassNode;
 import org.teavm.cache.IncrementalDependencyProvider;
 import org.teavm.cache.IncrementalDependencyRegistration;
 import org.teavm.callgraph.CallGraph;
-import org.teavm.callgraph.CallGraphNode;
-import org.teavm.callgraph.DefaultCallGraph;
-import org.teavm.common.CachedMapper;
-import org.teavm.common.Mapper;
+import org.teavm.common.CachedFunction;
 import org.teavm.common.ServiceRepository;
 import org.teavm.diagnostics.Diagnostics;
 import org.teavm.interop.PlatformMarker;
@@ -83,16 +81,17 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
             || shouldLog;
     static final boolean dependencyReport = System.getProperty("org.teavm.dependencyReport", "false").equals("true");
     private int classNameSuffix;
-    private ClassReaderSource unprocessedClassSource;
     private DependencyClassSource classSource;
+    ClassReaderSource agentClassSource;
     private ClassLoader classLoader;
     private Map<String, Map<MethodDescriptor, Optional<MethodHolder>>> methodReaderCache = new HashMap<>(1000, 0.5f);
-    private Mapper<FieldReference, FieldHolder> fieldReaderCache;
+    private Map<MethodReference, MethodDependency> implementationCache = new HashMap<>();
+    private Function<FieldReference, FieldHolder> fieldReaderCache;
     private Map<String, Map<MethodDescriptor, MethodDependency>> methodCache = new HashMap<>();
     private Set<MethodReference> reachedMethods = new LinkedHashSet<>();
     private Set<MethodReference> readonlyReachedMethods = Collections.unmodifiableSet(reachedMethods);
-    private CachedMapper<FieldReference, FieldDependency> fieldCache;
-    private CachedMapper<String, ClassDependency> classCache;
+    private CachedFunction<FieldReference, FieldDependency> fieldCache;
+    private CachedFunction<String, ClassDependency> classCache;
     private List<DependencyListener> listeners = new ArrayList<>();
     private ServiceRepository services;
     private Deque<Transition> pendingTransitions = new ArrayDeque<>();
@@ -113,20 +112,24 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
     private ClassHierarchy classHierarchy;
     IncrementalCache incrementalCache = new IncrementalCache();
     boolean asyncSupported;
+    private ReferenceCache referenceCache;
+    private Set<String> generatedClassNames = new HashSet<>();
+    DependencyType classType;
 
     DependencyAnalyzer(ClassReaderSource classSource, ClassLoader classLoader, ServiceRepository services,
-            Diagnostics diagnostics) {
-        unprocessedClassSource = classSource;
+            Diagnostics diagnostics, ReferenceCache referenceCache) {
         this.diagnostics = diagnostics;
+        this.referenceCache = referenceCache;
         this.classSource = new DependencyClassSource(classSource, diagnostics, incrementalCache);
+        agentClassSource = this.classSource;
         classHierarchy = new ClassHierarchy(this.classSource);
         this.classLoader = classLoader;
         this.services = services;
-        fieldReaderCache = new CachedMapper<>(preimage -> this.classSource.resolveMutable(preimage));
-        fieldCache = new CachedMapper<>(preimage -> {
-            FieldReader field = fieldReaderCache.map(preimage);
+        fieldReaderCache = new CachedFunction<>(preimage -> this.classSource.resolveMutable(preimage));
+        fieldCache = new CachedFunction<>(preimage -> {
+            FieldReader field = fieldReaderCache.apply(preimage);
             if (field != null && !field.getReference().equals(preimage)) {
-                return fieldCache.map(field.getReference());
+                return fieldCache.apply(field.getReference());
             }
             FieldDependency node = createFieldNode(preimage, field);
             if (field != null && field.getInitialValue() instanceof String) {
@@ -135,9 +138,18 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
             return node;
         });
 
-        classCache = new CachedMapper<>(this::createClassDependency);
+        classCache = new CachedFunction<>(this::createClassDependency);
 
         agent = new DependencyAgent(this);
+        classType = getType("java.lang.Class");
+    }
+
+    public void setObfuscated(boolean obfuscated) {
+        classSource.obfuscated = obfuscated;
+    }
+
+    public void setStrict(boolean strict) {
+        classSource.strict = strict;
     }
 
     public void setAsyncSupported(boolean asyncSupported) {
@@ -166,30 +178,8 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
             type = new DependencyType(this, name, types.size());
             types.add(type);
             typeMap.put(name, type);
-
-            if (!name.startsWith("[") && !name.startsWith("~")) {
-               markSupertypesAsHavingSubtypes(name);
-            }
         }
         return type;
-    }
-
-    private void markSupertypesAsHavingSubtypes(String name) {
-        ClassReader cls = unprocessedClassSource.get(name);
-        if (cls == null) {
-            cls = classSource.get(name);
-            if (cls == null) {
-                return;
-            }
-        }
-
-        if (cls.getParent() != null) {
-            getType(cls.getParent()).subtypeExists = true;
-        }
-
-        for (String itf : cls.getInterfaces()) {
-            getType(itf).subtypeExists = true;
-        }
     }
 
     public DependencyNode createNode() {
@@ -207,11 +197,11 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
 
     @Override
     public ClassReaderSource getClassSource() {
-        return classSource;
+        return classSource != null ? classSource : agentClassSource;
     }
 
     public boolean isSynthesizedClass(String className) {
-        return classSource.isGeneratedClass(className);
+        return classSource != null ? classSource.isGeneratedClass(className) : generatedClassNames.contains(className);
     }
 
     public ClassHierarchy getClassHierarchy() {
@@ -231,7 +221,7 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
         ClassNode node = new ClassNode();
         org.objectweb.asm.ClassReader reader = new org.objectweb.asm.ClassReader(data);
         reader.accept(node, 0);
-        submitClass(new Parser(new ReferenceCache()).parseClass(node));
+        submitClass(new Parser(referenceCache).parseClass(node));
         return node.name;
     }
 
@@ -400,7 +390,7 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
         if (completing && getClass(className) == null) {
             throw new IllegalStateException("Can't link class during completion phase");
         }
-        ClassDependency dep = classCache.map(className);
+        ClassDependency dep = classCache.apply(className);
         if (!dep.activated) {
             dep.activated = true;
             if (!dep.isMissing()) {
@@ -427,8 +417,7 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
 
     private ClassDependency createClassDependency(String className) {
         ClassReader cls = classSource.get(className);
-        ClassDependency dependency = new ClassDependency(this, className, cls);
-        return dependency;
+        return new ClassDependency(this, className, cls);
     }
 
     public MethodDependency linkMethod(String className, MethodDescriptor descriptor) {
@@ -525,10 +514,8 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
         return classCache.getCachedPreimages();
     }
 
-    private Set<FieldReference> fieldsAddedByRoot = new HashSet<>();
-
     public FieldDependency linkField(FieldReference fieldRef) {
-        FieldDependency dep = fieldCache.map(fieldRef);
+        FieldDependency dep = fieldCache.apply(fieldRef);
         if (!dep.activated) {
             dep.activated = true;
             if (!dep.isMissing()) {
@@ -612,8 +599,10 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
 
     @Override
     public MethodDependency getMethodImplementation(MethodReference methodRef) {
-        MethodReader method = getMethodHolder(methodRef.getClassName(), methodRef.getDescriptor());
-        return method != null ? getMethod(method.getReference()) : null;
+        return implementationCache.computeIfAbsent(methodRef, m -> {
+            MethodReader resolved = agentClassSource.resolveImplementation(m);
+            return resolved != null ? getMethod(resolved.getReference()) : null;
+        });
     }
 
     private MethodHolder getMethodHolder(String className, MethodDescriptor descriptor) {
@@ -730,7 +719,7 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
         System.out.println("Total domains: " + domainCount);
     }
 
-    public void cleanup() {
+    public void cleanup(ClassSourcePacker classSourcePacker) {
         for (DependencyNode node : allNodes) {
             node.followers = null;
             node.transitions = null;
@@ -738,18 +727,52 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
             node.method = null;
         }
 
-        allNodes.clear();
-        classSource.cleanup();
-        agent.cleanup();
-    }
-
-    public void cleanupTypes() {
         for (DependencyNode node : allNodes) {
             if (node.typeSet != null) {
                 node.typeSet.cleanup();
             }
         }
 
+        for (Map<?, MethodDependency> map : methodCache.values()) {
+            for (MethodDependency methodDependency : map.values()) {
+                methodDependency.locationListeners = null;
+                methodDependency.locations = null;
+                methodDependency.cleanup();
+            }
+        }
+
+        for (FieldReference fieldRef : fieldCache.getCachedPreimages()) {
+            FieldDependency field = fieldCache.getKnown(fieldRef);
+            if (field != null) {
+                field.locationListeners = null;
+                field.locations = null;
+                field.cleanup();
+            }
+        }
+
+        for (String className : classCache.getCachedPreimages()) {
+            ClassDependency cls = classCache.getKnown(className);
+            cls.cleanup();
+        }
+
+        allNodes.clear();
+        classSource.cleanup();
+        agent.cleanup();
+        listeners.clear();
+        classSource.innerHierarchy = null;
+
+        agentClassSource = classSourcePacker.pack(classSource,
+                ClassClosureAnalyzer.build(classSource, new ArrayList<>(classSource.cache.keySet())));
+        if (classSource != agentClassSource) {
+            classHierarchy = new ClassHierarchy(agentClassSource);
+            generatedClassNames.addAll(classSource.getGeneratedClassNames());
+        }
+        classSource = null;
+        methodReaderCache = null;
+        fieldReaderCache = null;
+    }
+
+    public void cleanupTypes() {
         for (MethodReference reachableMethod : getReachableMethods()) {
             MethodDependency dependency = getMethod(reachableMethod);
             for (int i = dependency.getParameterCount() + 1; i < dependency.getVariableCount(); ++i) {
@@ -831,7 +854,7 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
                     ValueType.Object itemType = (ValueType.Object) ValueType.parse(superClass.substring(1));
                     result = new SuperArrayFilter(this, getSuperClassFilter(itemType.getClassName()));
                 } else {
-                    result = new ExactTypeFilter(superClass);
+                    result = new ExactTypeFilter(getType(superClass));
                 }
             } else {
                 if (superClass.equals("java.lang.Object")) {
@@ -855,10 +878,7 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
             return;
         }
 
-        CallGraphNode caller = callGraph.getNode(methodDep.getReference());
-
         ProgramEmitter pe = ProgramEmitter.create(program, classHierarchy);
-        boolean hasIndy = false;
         BasicBlockSplitter splitter = new BasicBlockSplitter(program);
         for (int i = 0; i < program.basicBlockCount(); ++i) {
             BasicBlock block = program.basicBlockAt(i);
@@ -883,7 +903,6 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
                     continue;
                 }
 
-                hasIndy = true;
                 BasicBlock splitBlock = splitter.split(block, insn);
 
                 pe.enter(block);
@@ -908,7 +927,6 @@ public abstract class DependencyAnalyzer implements DependencyInfo {
                     pe.addInstruction(assign);
                 }
                 pe.jump(splitBlock);
-                block = splitBlock;
             }
         }
         splitter.fixProgram();

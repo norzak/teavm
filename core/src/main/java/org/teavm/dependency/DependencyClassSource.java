@@ -36,12 +36,14 @@ import org.teavm.model.util.ModelUtils;
 
 class DependencyClassSource implements ClassHolderSource {
     private ClassReaderSource innerSource;
-    private ClassHierarchy innerHierarchy;
+    ClassHierarchy innerHierarchy;
     private Diagnostics diagnostics;
     private IncrementalDependencyRegistration dependencyRegistration;
     private Map<String, ClassHolder> generatedClasses = new LinkedHashMap<>();
     private List<ClassHolderTransformer> transformers = new ArrayList<>();
-    private Map<String, Optional<ClassHolder>> cache = new LinkedHashMap<>(1000, 0.5f);
+    boolean obfuscated;
+    boolean strict;
+    Map<String, Optional<ClassHolder>> cache = new LinkedHashMap<>(1000, 0.5f);
 
     DependencyClassSource(ClassReaderSource innerSource, Diagnostics diagnostics,
             IncrementalDependencyRegistration dependencyRegistration) {
@@ -93,6 +95,10 @@ class DependencyClassSource implements ClassHolderSource {
         return generatedClasses.get(name);
     }
 
+    Collection<String> getGeneratedClassNames() {
+        return generatedClasses.keySet();
+    }
+
     public Collection<ClassHolder> getGeneratedClasses() {
         return generatedClasses.values();
     }
@@ -123,6 +129,16 @@ class DependencyClassSource implements ClassHolderSource {
         @Override
         public IncrementalDependencyRegistration getIncrementalCache() {
             return dependencyRegistration;
+        }
+
+        @Override
+        public boolean isObfuscated() {
+            return obfuscated;
+        }
+
+        @Override
+        public boolean isStrict() {
+            return strict;
         }
     };
 }

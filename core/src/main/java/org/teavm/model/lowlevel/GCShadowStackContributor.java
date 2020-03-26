@@ -22,35 +22,32 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+import org.teavm.common.DisjointSet;
 import org.teavm.common.DominatorTree;
 import org.teavm.common.Graph;
 import org.teavm.common.GraphBuilder;
 import org.teavm.common.GraphUtils;
 import org.teavm.model.BasicBlock;
-import org.teavm.model.Incoming;
 import org.teavm.model.Instruction;
 import org.teavm.model.MethodReader;
 import org.teavm.model.MethodReference;
-import org.teavm.model.Phi;
 import org.teavm.model.Program;
 import org.teavm.model.Variable;
-import org.teavm.model.instructions.CloneArrayInstruction;
-import org.teavm.model.instructions.ConstructArrayInstruction;
-import org.teavm.model.instructions.ConstructInstruction;
-import org.teavm.model.instructions.ConstructMultiArrayInstruction;
-import org.teavm.model.instructions.InitClassInstruction;
+import org.teavm.model.instructions.AssignInstruction;
+import org.teavm.model.instructions.CastInstruction;
+import org.teavm.model.instructions.ClassConstantInstruction;
 import org.teavm.model.instructions.IntegerConstantInstruction;
 import org.teavm.model.instructions.InvocationType;
 import org.teavm.model.instructions.InvokeInstruction;
-import org.teavm.model.instructions.RaiseInstruction;
+import org.teavm.model.instructions.NullCheckInstruction;
+import org.teavm.model.instructions.NullConstantInstruction;
+import org.teavm.model.instructions.StringConstantInstruction;
+import org.teavm.model.instructions.UnwrapArrayInstruction;
 import org.teavm.model.util.DefinitionExtractor;
 import org.teavm.model.util.GraphColorer;
 import org.teavm.model.util.LivenessAnalyzer;
@@ -62,75 +59,89 @@ import org.teavm.runtime.ShadowStack;
 
 public class GCShadowStackContributor {
     private Characteristics characteristics;
+    private NativePointerFinder nativePointerFinder;
 
     public GCShadowStackContributor(Characteristics characteristics) {
         this.characteristics = characteristics;
+        nativePointerFinder = new NativePointerFinder(characteristics);
     }
 
     public int contribute(Program program, MethodReader method) {
         List<Map<Instruction, BitSet>> liveInInformation = findCallSiteLiveIns(program, method);
 
-        Graph interferenceGraph = buildInterferenceGraph(liveInInformation, program);
         boolean[] spilled = getAffectedVariables(liveInInformation, program);
+        int[] variableClasses = getVariableClasses(program);
+        Graph interferenceGraph = buildInterferenceGraph(liveInInformation, program, spilled, variableClasses);
+        int[] classColors = new int[interferenceGraph.size()];
+        Arrays.fill(classColors, -1);
+        new GraphColorer().colorize(interferenceGraph, classColors);
         int[] colors = new int[interferenceGraph.size()];
-        Arrays.fill(colors, -1);
-        new GraphColorer().colorize(interferenceGraph, colors);
+        for (int i = 0; i < colors.length; ++i) {
+            colors[i] = classColors[variableClasses[i]];
+        }
 
         int usedColors = 0;
         for (int var = 0; var < colors.length; ++var) {
             if (spilled[var]) {
                 usedColors = Math.max(usedColors, colors[var]);
                 colors[var]--;
+            } else {
+                colors[var] = -1;
             }
         }
         if (usedColors == 0) {
             return 0;
         }
 
-        // If a variable is spilled to stack, then phi which input this variable also spilled to stack
+        // If a variable is spilled to stack, then phi which takes this variable as input also spilled to stack
         // If all of phi inputs are spilled to stack, then we don't need to insert spilling instruction
         // for this phi.
-        List<Set<Phi>> destinationPhis = getDestinationPhis(program);
-        int[] inputCount = getInputCount(program);
-        boolean[] autoSpilled = new boolean[spilled.length];
-        for (int i = 0; i < spilled.length; ++i) {
-            findAutoSpilledPhis(spilled, destinationPhis, inputCount, autoSpilled, i);
-        }
+        Graph cfg = ProgramUtils.buildControlFlowGraph(program);
+        DominatorTree dom = GraphUtils.buildDominatorTree(cfg);
+        boolean[] autoSpilled = new SpilledPhisFinder(liveInInformation, dom, program, variableClasses, colors).find();
 
-        List<Map<Instruction, int[]>> liveInStores = reduceGCRootStores(program, usedColors, liveInInformation,
-                colors, autoSpilled);
+        List<Map<Instruction, int[]>> liveInStores = reduceGCRootStores(dom, program, usedColors, liveInInformation,
+                colors, autoSpilled, variableClasses);
         putLiveInGCRoots(program, liveInStores);
 
         return usedColors;
     }
 
-    private void findAutoSpilledPhis(boolean[] spilled, List<Set<Phi>> destinationPhis, int[] inputCount,
-            boolean[] autoSpilled, int i) {
-        if (spilled[i]) {
-            Set<Phi> phis = destinationPhis.get(i);
-            if (phis != null) {
-                for (Phi phi : destinationPhis.get(i)) {
-                    int destination = phi.getReceiver().getIndex();
-                    autoSpilled[destination] = --inputCount[destination] == 0;
-                    if (!spilled[destination]) {
-                        spilled[destination] = true;
-                        if (i > destination) {
-                            findAutoSpilledPhis(spilled, destinationPhis, inputCount, autoSpilled, destination);
-                        }
-                    }
+    private int[] getVariableClasses(Program program) {
+        DisjointSet disjointSet = new DisjointSet();
+        for (int i = 0; i < program.variableCount(); ++i) {
+            disjointSet.create();
+        }
+        for (BasicBlock block : program.getBasicBlocks()) {
+            for (Instruction instruction : block) {
+                if (instruction instanceof AssignInstruction) {
+                    AssignInstruction assign = (AssignInstruction) instruction;
+                    disjointSet.union(assign.getAssignee().getIndex(), assign.getReceiver().getIndex());
+                } else if (instruction instanceof NullCheckInstruction) {
+                    NullCheckInstruction nullCheck = (NullCheckInstruction) instruction;
+                    disjointSet.union(nullCheck.getValue().getIndex(), nullCheck.getReceiver().getIndex());
+                } else if (instruction instanceof CastInstruction) {
+                    CastInstruction cast = (CastInstruction) instruction;
+                    disjointSet.union(cast.getValue().getIndex(), cast.getReceiver().getIndex());
+                } else if (instruction instanceof UnwrapArrayInstruction) {
+                    UnwrapArrayInstruction unwrapArray = (UnwrapArrayInstruction) instruction;
+                    disjointSet.union(unwrapArray.getArray().getIndex(), unwrapArray.getReceiver().getIndex());
                 }
             }
         }
+        return disjointSet.pack(program.variableCount());
     }
 
     private List<Map<Instruction, BitSet>> findCallSiteLiveIns(Program program, MethodReader method) {
-        Graph cfg = ProgramUtils.buildControlFlowGraph(program);
+        boolean[] nativePointers = nativePointerFinder.findNativePointers(method.getReference(), program);
+        BitSet constants = findConstantRefVariables(program);
+
         TypeInferer typeInferer = new TypeInferer();
         typeInferer.inferTypes(program, method.getReference());
         List<Map<Instruction, BitSet>> liveInInformation = new ArrayList<>();
 
         LivenessAnalyzer livenessAnalyzer = new LivenessAnalyzer();
-        livenessAnalyzer.analyze(program);
+        livenessAnalyzer.analyze(program, method.getDescriptor());
         DefinitionExtractor defExtractor = new DefinitionExtractor();
         UsageExtractor useExtractor = new UsageExtractor();
 
@@ -138,10 +149,7 @@ public class GCShadowStackContributor {
             BasicBlock block = program.basicBlockAt(i);
             Map<Instruction, BitSet> blockLiveIn = new HashMap<>();
             liveInInformation.add(blockLiveIn);
-            BitSet currentLiveOut = new BitSet();
-            for (int successor : cfg.outgoingEdges(i)) {
-                currentLiveOut.or(livenessAnalyzer.liveIn(successor));
-            }
+            BitSet currentLiveOut = livenessAnalyzer.liveOut(i);
 
             for (Instruction insn = block.getLastInstruction(); insn != null; insn = insn.getPrevious()) {
                 insn.acceptVisitor(defExtractor);
@@ -152,18 +160,10 @@ public class GCShadowStackContributor {
                 for (Variable definedVar : defExtractor.getDefinedVariables()) {
                     currentLiveOut.clear(definedVar.getIndex());
                 }
-                if (insn instanceof InvokeInstruction || insn instanceof InitClassInstruction
-                        || insn instanceof ConstructInstruction || insn instanceof ConstructArrayInstruction
-                        || insn instanceof ConstructMultiArrayInstruction
-                        || insn instanceof CloneArrayInstruction || insn instanceof RaiseInstruction) {
-                    if (insn instanceof InvokeInstruction
-                            && !characteristics.isManaged(((InvokeInstruction) insn).getMethod())) {
-                        continue;
-                    }
-
+                if (ExceptionHandlingShadowStackContributor.isCallInstruction(characteristics, insn)) {
                     BitSet csLiveIn = (BitSet) currentLiveOut.clone();
                     for (int v = csLiveIn.nextSetBit(0); v >= 0; v = csLiveIn.nextSetBit(v + 1)) {
-                        if (!isReference(typeInferer, v)) {
+                        if (!isReference(typeInferer, v) || nativePointers[v] || constants.get(v)) {
                             csLiveIn.clear(v);
                         }
                     }
@@ -179,7 +179,8 @@ public class GCShadowStackContributor {
         return liveInInformation;
     }
 
-    private Graph buildInterferenceGraph(List<Map<Instruction, BitSet>> liveInInformation, Program program) {
+    private Graph buildInterferenceGraph(List<Map<Instruction, BitSet>> liveInInformation, Program program,
+            boolean[] spilled, int[] variableClasses) {
         GraphBuilder builder = new GraphBuilder(program.variableCount());
         for (Map<Instruction, BitSet> blockLiveIn : liveInInformation) {
             for (BitSet liveVarsSet : blockLiveIn.values()) {
@@ -190,8 +191,12 @@ public class GCShadowStackContributor {
                 int[] liveVarArray = liveVars.toArray();
                 for (int i = 0; i < liveVarArray.length - 1; ++i) {
                     for (int j = i + 1; j < liveVarArray.length; ++j) {
-                        builder.addEdge(liveVarArray[i], liveVarArray[j]);
-                        builder.addEdge(liveVarArray[j], liveVarArray[i]);
+                        int a = liveVarArray[i];
+                        int b = liveVarArray[j];
+                        if (spilled[a] && spilled[b]) {
+                            builder.addEdge(variableClasses[a], variableClasses[b]);
+                            builder.addEdge(variableClasses[b], variableClasses[a]);
+                        }
                     }
                 }
             }
@@ -211,42 +216,9 @@ public class GCShadowStackContributor {
         return affectedVariables;
     }
 
-    private List<Set<Phi>> getDestinationPhis(Program program) {
-        List<Set<Phi>> destinationPhis = new ArrayList<>();
-        destinationPhis.addAll(Collections.nCopies(program.variableCount(), null));
-
-        for (int i = 0; i < program.basicBlockCount(); ++i) {
-            BasicBlock block = program.basicBlockAt(i);
-            for (Phi phi : block.getPhis()) {
-                for (Incoming incoming : phi.getIncomings()) {
-                    Set<Phi> phis = destinationPhis.get(incoming.getValue().getIndex());
-                    if (phis == null) {
-                        phis = new LinkedHashSet<>();
-                        destinationPhis.set(incoming.getValue().getIndex(), phis);
-                    }
-                    phis.add(phi);
-                }
-            }
-        }
-
-        return destinationPhis;
-    }
-
-    private int[] getInputCount(Program program) {
-        int[] inputCount = new int[program.variableCount()];
-
-        for (int i = 0; i < program.basicBlockCount(); ++i) {
-            BasicBlock block = program.basicBlockAt(i);
-            for (Phi phi : block.getPhis()) {
-                inputCount[phi.getReceiver().getIndex()] = phi.getIncomings().size();
-            }
-        }
-
-        return inputCount;
-    }
-
-    private List<Map<Instruction, int[]>> reduceGCRootStores(Program program, int usedColors,
-            List<Map<Instruction, BitSet>> liveInInformation, int[] colors, boolean[] autoSpilled) {
+    private List<Map<Instruction, int[]>> reduceGCRootStores(DominatorTree dom, Program program, int usedColors,
+            List<Map<Instruction, BitSet>> liveInInformation, int[] colors, boolean[] autoSpilled,
+            int[] variableClasses) {
         class Step {
             private final int node;
             private final int[] slotStates = new int[usedColors];
@@ -260,14 +232,12 @@ public class GCShadowStackContributor {
             slotsToUpdate.add(new LinkedHashMap<>());
         }
 
-        Graph cfg = ProgramUtils.buildControlFlowGraph(program);
-        DominatorTree dom = GraphUtils.buildDominatorTree(cfg);
-        Graph domGraph = GraphUtils.buildDominatorGraph(dom, cfg.size());
+        Graph domGraph = GraphUtils.buildDominatorGraph(dom, program.basicBlockCount());
 
         Step[] stack = new Step[program.basicBlockCount() * 2];
         int head = 0;
         Step start = new Step(0);
-        Arrays.fill(start.slotStates, usedColors);
+        Arrays.fill(start.slotStates, program.variableCount());
         stack[head++] = start;
 
         while (head > 0) {
@@ -290,7 +260,8 @@ public class GCShadowStackContributor {
                     }
                 }
 
-                updatesByCallSite.put(callSiteLocation, compareStates(previousStates, states, autoSpilled));
+                int[] updates = compareStates(previousStates, states, autoSpilled, variableClasses);
+                updatesByCallSite.put(callSiteLocation, updates);
                 previousStates = states;
                 states = states.clone();
             }
@@ -316,18 +287,27 @@ public class GCShadowStackContributor {
         return sortedInstructions;
     }
 
-    private static int[] compareStates(int[] oldStates, int[] newStates, boolean[] autoSpilled) {
+    private static int[] compareStates(int[] oldStates, int[] newStates, boolean[] autoSpilled,
+            int[] definitionClasses) {
         int[] comparison = new int[oldStates.length];
         Arrays.fill(comparison, -2);
 
         for (int i = 0; i < oldStates.length; ++i) {
-            if (oldStates[i] != newStates[i]) {
+            int oldState = oldStates[i];
+            int newState = newStates[i];
+            if (oldState >= 0 && oldState < definitionClasses.length) {
+                oldState = definitionClasses[oldState];
+            }
+            if (newState >= 0 && newState < definitionClasses.length) {
+                newState = definitionClasses[newState];
+            }
+            if (oldState != newState) {
                 comparison[i] = newStates[i];
             }
         }
 
         for (int i = 0; i < newStates.length; ++i) {
-            if (newStates[i] >= 0 && autoSpilled[newStates[i]]) {
+            if (newStates[i] >= 0 && autoSpilled[definitionClasses[newStates[i]]]) {
                 comparison[i] = -2;
             }
         }
@@ -342,7 +322,7 @@ public class GCShadowStackContributor {
             Instruction[] callSiteLocations = updatesByIndex.keySet().toArray(new Instruction[0]);
             ObjectIntMap<Instruction> instructionIndexes = getInstructionIndexes(block);
             Arrays.sort(callSiteLocations, Comparator.comparing(instructionIndexes::get));
-            for (Instruction callSiteLocation : updatesByIndex.keySet()) {
+            for (Instruction callSiteLocation : callSiteLocations) {
                 int[] updates = updatesByIndex.get(callSiteLocation);
                 storeLiveIns(block, callSiteLocation, updates);
             }
@@ -410,5 +390,47 @@ public class GCShadowStackContributor {
             default:
                 return false;
         }
+    }
+
+    private BitSet findConstantRefVariables(Program program) {
+        BitSet constantClasses = new BitSet();
+        DisjointSet classes = new DisjointSet();
+        for (int i = 0; i < program.variableCount(); ++i) {
+            classes.create();
+        }
+
+        for (BasicBlock block : program.getBasicBlocks()) {
+            for (Instruction instruction : block) {
+                Variable variable;
+                if (instruction instanceof ClassConstantInstruction) {
+                    variable = ((ClassConstantInstruction) instruction).getReceiver();
+                } else if (instruction instanceof StringConstantInstruction) {
+                    variable = ((StringConstantInstruction) instruction).getReceiver();
+                } else if (instruction instanceof NullConstantInstruction) {
+                    variable = ((NullConstantInstruction) instruction).getReceiver();
+                } else if (instruction instanceof AssignInstruction) {
+                    AssignInstruction assign = (AssignInstruction) instruction;
+                    boolean wasConstant = constantClasses.get(classes.find(assign.getAssignee().getIndex()));
+                    int newClass = classes.union(assign.getAssignee().getIndex(), assign.getReceiver().getIndex());
+                    if (wasConstant) {
+                        constantClasses.set(newClass);
+                    }
+                    continue;
+                } else {
+                    continue;
+                }
+
+                constantClasses.set(classes.find(variable.getIndex()));
+            }
+        }
+
+        BitSet result = new BitSet();
+        for (int i = 0; i < program.variableCount(); ++i) {
+            if (constantClasses.get(classes.find(i))) {
+                result.set(i);
+            }
+        }
+
+        return result;
     }
 }

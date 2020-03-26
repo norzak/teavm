@@ -29,6 +29,7 @@ import org.objectweb.asm.commons.JSRInlinerAdapter;
 import org.objectweb.asm.tree.AnnotationNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldNode;
+import org.objectweb.asm.tree.InnerClassNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.teavm.common.Graph;
 import org.teavm.common.GraphUtils;
@@ -42,6 +43,8 @@ import org.teavm.model.ElementHolder;
 import org.teavm.model.ElementModifier;
 import org.teavm.model.FieldHolder;
 import org.teavm.model.FieldReference;
+import org.teavm.model.GenericTypeParameter;
+import org.teavm.model.GenericValueType;
 import org.teavm.model.Instruction;
 import org.teavm.model.MethodDescriptor;
 import org.teavm.model.MethodHolder;
@@ -76,23 +79,27 @@ public class Parser {
         ValueType[] signature = MethodDescriptor.parseSignature(node.desc);
         MethodHolder method = new MethodHolder(referenceCache.getCached(new MethodDescriptor(node.name, signature)));
         parseModifiers(node.access, method, DECL_METHOD);
-
-        ProgramParser programParser = new ProgramParser(referenceCache);
-        programParser.setFileName(fileName);
-        Program program = programParser.parse(node);
-        new UnreachableBasicBlockEliminator().optimize(program);
-        PhiUpdater phiUpdater = new PhiUpdater();
-        Variable[] argumentMapping = applySignature(program, method.getParameterTypes());
-        phiUpdater.updatePhis(program, argumentMapping);
-        method.setProgram(program);
-        applyDebugNames(program, phiUpdater, programParser, argumentMapping);
-
         parseAnnotations(method.getAnnotations(), node.visibleAnnotations, node.invisibleAnnotations);
-        applyDebugNames(program, phiUpdater, programParser,
-                applySignature(program, method.getDescriptor().getParameterTypes()));
-        while (program.variableCount() <= method.parameterCount()) {
-            program.createVariable();
+
+        if (node.instructions.size() > 0) {
+            ProgramParser programParser = new ProgramParser(referenceCache);
+            programParser.setFileName(fileName);
+            Program program = programParser.parse(node);
+            new UnreachableBasicBlockEliminator().optimize(program);
+            PhiUpdater phiUpdater = new PhiUpdater();
+            Variable[] argumentMapping = applySignature(program, method.getParameterTypes());
+            phiUpdater.updatePhis(program, argumentMapping);
+            method.setProgram(program);
+            applyDebugNames(program, phiUpdater, programParser, argumentMapping);
+
+            applyDebugNames(program, phiUpdater, programParser,
+                    applySignature(program, method.getDescriptor().getParameterTypes()));
+
+            while (program.variableCount() <= method.parameterCount()) {
+                program.createVariable();
+            }
         }
+
         if (node.annotationDefault != null) {
             method.setAnnotationDefault(parseAnnotationValue(node.annotationDefault));
         }
@@ -101,7 +108,47 @@ public class Parser {
                     node.visibleParameterAnnotations != null ? node.visibleParameterAnnotations[i] : null,
                     node.invisibleParameterAnnotations != null ? node.invisibleParameterAnnotations[i] : null);
         }
+
+        if (node.signature != null) {
+            parseMethodGenericSignature(node.signature, method);
+        }
+
         return method;
+    }
+
+    private void parseMethodGenericSignature(String signature, MethodHolder method) {
+        GenericValueType.ParsePosition position = new GenericValueType.ParsePosition();
+
+        List<GenericTypeParameter> typeParameters = new ArrayList<>();
+        String elementName = "method '" + method.getDescriptor() + "'";
+        if (signature.charAt(position.index) == '<') {
+            parseTypeParameters(signature, typeParameters, position, elementName);
+        }
+
+        List<GenericValueType> parameters = new ArrayList<>();
+        if (signature.charAt(position.index) != '(') {
+            throw couldNotParseSignature(elementName, signature);
+        }
+        position.index++;
+        while (signature.charAt(position.index) != ')') {
+            GenericValueType parameter = GenericValueType.parse(signature, position);
+            if (parameter == null) {
+                throw couldNotParseSignature(elementName, signature);
+            }
+            parameters.add(parameter);
+        }
+        position.index++;
+        GenericValueType returnType = GenericValueType.parse(signature, position);
+        if (returnType == null) {
+            throw couldNotParseSignature(elementName, signature);
+        }
+
+        if (position.index < signature.length() && signature.charAt(position.index) != '^') {
+            throw couldNotParseSignature(elementName, signature);
+        }
+
+        method.setTypeParameters(typeParameters.toArray(new GenericTypeParameter[0]));
+        method.setGenericSignature(returnType, parameters.toArray(new GenericValueType[0]));
     }
 
     private static void applyDebugNames(Program program, PhiUpdater phiUpdater, ProgramParser parser,
@@ -242,6 +289,11 @@ public class Parser {
                 cls.getInterfaces().add(referenceCache.getCached(iface.replace('/', '.')));
             }
         }
+
+        if (node.signature != null) {
+            parseSignature(cls, node.signature);
+        }
+
         for (Object obj : node.fields) {
             FieldNode fieldNode = (FieldNode) obj;
             FieldHolder field = parseField(fieldNode);
@@ -255,16 +307,101 @@ public class Parser {
             cls.addMethod(method);
             method.updateReference(referenceCache);
         }
+
         if (node.outerClass != null) {
             cls.setOwnerName(node.outerClass.replace('/', '.'));
-        } else {
-            int lastIndex = node.name.lastIndexOf('$');
-            if (lastIndex != -1) {
-                cls.setOwnerName(node.name.substring(0, lastIndex).replace('/', '.'));
+        }
+
+        if (node.innerClasses != null && !node.innerClasses.isEmpty()) {
+            for (InnerClassNode innerClassNode : node.innerClasses) {
+                if (node.name.equals(innerClassNode.name)) {
+                    if (innerClassNode.outerName != null) {
+                        cls.setDeclaringClassName(innerClassNode.outerName.replace('/', '.'));
+                        cls.setOwnerName(cls.getDeclaringClassName());
+                    }
+                    cls.setSimpleName(innerClassNode.innerName);
+                    break;
+                }
             }
         }
+
         parseAnnotations(cls.getAnnotations(), node.visibleAnnotations, node.invisibleAnnotations);
         return cls;
+    }
+
+    private void parseSignature(ClassHolder cls, String signature) {
+        GenericValueType.ParsePosition position = new GenericValueType.ParsePosition();
+        List<GenericTypeParameter> typeParameters = new ArrayList<>();
+
+        String elementName = "class '" + cls.getName() + "'";
+        if (signature.charAt(position.index) == '<') {
+            parseTypeParameters(signature, typeParameters, position, elementName);
+        }
+
+        cls.setGenericParameters(typeParameters.toArray(new GenericTypeParameter[0]));
+
+        GenericValueType.Object supertype = GenericValueType.parseObject(signature, position);
+        if (supertype == null) {
+            throw couldNotParseSignature(elementName, signature);
+        }
+        cls.setGenericParent(supertype);
+
+        List<GenericValueType.Object> interfaces = new ArrayList<>();
+        while (position.index < signature.length()) {
+            GenericValueType.Object itf = GenericValueType.parseObject(signature, position);
+            if (itf == null) {
+                throw couldNotParseSignature(elementName, signature);
+            }
+            interfaces.add(itf);
+        }
+
+        cls.getGenericInterfaces().addAll(interfaces);
+    }
+
+    private void parseTypeParameters(String signature, List<GenericTypeParameter> typeParameters,
+            GenericValueType.ParsePosition position, String elementName) {
+        position.index++;
+        do {
+            if (position.index >= signature.length()) {
+                throw couldNotParseSignature(elementName, signature);
+            }
+            int next = signature.indexOf(':', position.index);
+            if (next < 0 || next == position.index) {
+                throw couldNotParseSignature(elementName, signature);
+            }
+            String name = signature.substring(position.index, next);
+            position.index = next;
+
+            List<GenericValueType.Reference> bounds = new ArrayList<>();
+            while (true) {
+                if (position.index >= signature.length()) {
+                    throw couldNotParseSignature(elementName, signature);
+                }
+                char c = signature.charAt(position.index);
+                if (c != ':') {
+                    break;
+                }
+                position.index++;
+                if (bounds.isEmpty() && signature.charAt(position.index) == ':') {
+                    bounds.add(null);
+                } else {
+                    GenericValueType.Reference bound = GenericValueType.parseReference(signature, position);
+                    if (bound == null) {
+                        throw couldNotParseSignature(elementName, signature);
+                    }
+                    bounds.add(bound);
+                }
+            }
+
+            typeParameters.add(new GenericTypeParameter(name, bounds.get(0),
+                    bounds.subList(1, bounds.size()).toArray(new GenericValueType.Reference[0])));
+        } while (signature.charAt(position.index) != '>');
+
+        position.index++;
+    }
+
+    private IllegalArgumentException couldNotParseSignature(String forElement, String signature) {
+        return new IllegalArgumentException("Could not parse class signature '" + signature + "' for " + forElement);
     }
 
     public FieldHolder parseField(FieldNode node) {
@@ -273,6 +410,16 @@ public class Parser {
         field.setInitialValue(node.value);
         parseModifiers(node.access, field, DECL_FIELD);
         parseAnnotations(field.getAnnotations(), node.visibleAnnotations, node.invisibleAnnotations);
+
+        if (node.signature != null) {
+            GenericValueType.ParsePosition position = new GenericValueType.ParsePosition();
+            GenericValueType type = GenericValueType.parse(node.signature, position);
+            if (type == null || position.index < node.signature.length()) {
+                throw couldNotParseSignature("field '" + field.getReference() + "'", node.signature);
+            }
+            field.setGenericType(type);
+        }
+
         return field;
     }
 
@@ -406,6 +553,8 @@ public class Parser {
             return new AnnotationValue((String) value);
         } else if (value instanceof Boolean) {
             return new AnnotationValue((Boolean) value);
+        } else if (value instanceof Character) {
+            return new AnnotationValue((Character) value);
         } else if (value instanceof Byte) {
             return new AnnotationValue((Byte) value);
         } else if (value instanceof Short) {

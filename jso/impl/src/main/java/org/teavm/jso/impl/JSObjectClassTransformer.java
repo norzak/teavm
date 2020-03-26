@@ -73,9 +73,6 @@ class JSObjectClassTransformer implements ClassHolderTransformer {
         if (typeHelper.isJavaScriptClass(cls.getName())) {
             processor.processMemberMethods(cls);
         }
-        if (typeHelper.isJavaScriptImplementation(cls.getName())) {
-            processor.makeSync(cls);
-        }
 
         for (MethodHolder method : cls.getMethods().toArray(new MethodHolder[0])) {
             if (method.getProgram() != null) {
@@ -132,7 +129,7 @@ class JSObjectClassTransformer implements ClassHolderTransformer {
 
             for (int i = 0; i < method.parameterCount(); ++i) {
                 variablesToPass[i] = marshaller.unwrapReturnValue(callLocation, variablesToPass[i],
-                        method.parameterType(i));
+                        method.parameterType(i), false);
             }
 
             basicBlock.addAll(marshallInstructions);
@@ -156,8 +153,6 @@ class JSObjectClassTransformer implements ClassHolderTransformer {
             basicBlock.add(exit);
 
             classHolder.addMethod(exportedMethod);
-            MethodHolder methodToCall = classHolder.getMethod(method);
-            JSClassProcessor.makeSync(methodToCall != null ? methodToCall : exportedMethod);
 
             String publicAlias = classToExpose.methods.get(method);
             AnnotationHolder annot = new AnnotationHolder(JSMethodToExpose.class.getName());

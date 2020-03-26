@@ -49,10 +49,12 @@ public class WasmBinaryRenderer {
     private List<WasmSignature> signatures = new ArrayList<>();
     private Map<WasmSignature, Integer> signatureIndexes = new HashMap<>();
     private Map<String, Integer> functionIndexes = new HashMap<>();
+    private boolean obfuscated;
 
-    public WasmBinaryRenderer(WasmBinaryWriter output, WasmBinaryVersion version) {
+    public WasmBinaryRenderer(WasmBinaryWriter output, WasmBinaryVersion version, boolean obfuscated) {
         this.output = output;
         this.version = version;
+        this.obfuscated = obfuscated;
     }
 
     public void render(WasmModule module) {
@@ -73,7 +75,9 @@ public class WasmBinaryRenderer {
         renderElement(module);
         renderCode(module);
         renderData(module);
-        renderNames(module);
+        if (!obfuscated) {
+            renderNames(module);
+        }
     }
 
     private void renderSignatures(WasmModule module) {
@@ -179,8 +183,8 @@ public class WasmBinaryRenderer {
 
         section.writeByte(1);
         section.writeByte(1);
-        section.writeLEB(module.getMemorySize());
-        section.writeLEB(module.getMemorySize());
+        section.writeLEB(module.getMinMemorySize());
+        section.writeLEB(module.getMaxMemorySize());
 
         writeSection(SECTION_MEMORY, "memory", section.getData());
     }
@@ -264,7 +268,8 @@ public class WasmBinaryRenderer {
         WasmBinaryWriter code = new WasmBinaryWriter();
 
         List<WasmLocal> localVariables = function.getLocalVariables();
-        localVariables = localVariables.subList(function.getParameters().size(), localVariables.size());
+        int parameterCount = Math.min(function.getParameters().size(), localVariables.size());
+        localVariables = localVariables.subList(parameterCount, localVariables.size());
         if (localVariables.isEmpty()) {
             code.writeLEB(0);
         } else {
@@ -333,7 +338,7 @@ public class WasmBinaryRenderer {
 
         WasmBinaryWriter functionsSubsection = new WasmBinaryWriter();
         Collection<WasmFunction> functions = module.getFunctions().values();
-
+        functions = functions.stream().filter(f -> f.getImportName() == null).collect(Collectors.toList());
         functionsSubsection.writeLEB(functions.size());
 
         for (WasmFunction function : functions) {

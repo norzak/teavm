@@ -42,12 +42,13 @@ import org.mozilla.javascript.ScriptableObject;
 import org.mozilla.javascript.Undefined;
 import org.mozilla.javascript.typedarrays.NativeUint16Array;
 import org.teavm.ast.AsyncMethodNode;
-import org.teavm.ast.RegularMethodNode;
 import org.teavm.backend.javascript.JavaScriptTarget;
 import org.teavm.cache.AlwaysStaleCacheStatus;
+import org.teavm.cache.AstCacheEntry;
 import org.teavm.cache.CacheStatus;
 import org.teavm.cache.InMemoryMethodNodeCache;
 import org.teavm.cache.InMemoryProgramCache;
+import org.teavm.cache.InMemorySymbolTable;
 import org.teavm.callgraph.CallGraph;
 import org.teavm.dependency.FastDependencyAnalyzer;
 import org.teavm.diagnostics.DefaultProblemTextConsumer;
@@ -57,6 +58,7 @@ import org.teavm.model.ClassHolderSource;
 import org.teavm.model.ClassReader;
 import org.teavm.model.MethodReference;
 import org.teavm.model.Program;
+import org.teavm.model.ReferenceCache;
 import org.teavm.model.util.ModelUtils;
 import org.teavm.parsing.ClasspathClassHolderSource;
 import org.teavm.tooling.TeaVMProblemRenderer;
@@ -70,7 +72,7 @@ public class IncrementalTest {
     private static final String NEW_FILE = "classes-new.js";
     private static final String REFRESHED_FILE = "classes-refreshed.js";
     private static ClassHolderSource oldClassSource = new ClasspathClassHolderSource(
-            IncrementalTest.class.getClassLoader());
+            IncrementalTest.class.getClassLoader(), new ReferenceCache());
     private static Context rhinoContext;
     private static ScriptableObject rhinoRootScope;
     private String[] updatedMethods;
@@ -204,7 +206,8 @@ public class IncrementalTest {
             vm.setOptimizationLevel(TeaVMOptimizationLevel.SIMPLE);
             vm.setProgramCache(programCache);
             target.setAstCache(astCache);
-            target.setMinifying(false);
+            target.setObfuscated(false);
+            target.setStrict(true);
             vm.add(new EntryPointTransformer(entryPoint));
             vm.entryPoint(EntryPoint.class.getName());
             vm.installPlugins();
@@ -236,8 +239,13 @@ public class IncrementalTest {
         final Set<MethodReference> updatedMethods = new HashSet<>();
         boolean capturing;
 
+        CapturingMethodNodeCache() {
+            super(new ReferenceCache(), new InMemorySymbolTable(), new InMemorySymbolTable(),
+                    new InMemorySymbolTable());
+        }
+
         @Override
-        public void store(MethodReference methodReference, RegularMethodNode node, Supplier<String[]> dependencies) {
+        public void store(MethodReference methodReference, AstCacheEntry node, Supplier<String[]> dependencies) {
             super.store(methodReference, node, dependencies);
             if (capturing) {
                 updatedMethods.add(methodReference);
@@ -256,6 +264,11 @@ public class IncrementalTest {
     static class CapturingProgramCache extends InMemoryProgramCache {
         final Set<MethodReference> updatedMethods = new HashSet<>();
         boolean capturing;
+
+        CapturingProgramCache() {
+            super(new ReferenceCache(), new InMemorySymbolTable(), new InMemorySymbolTable(),
+                    new InMemorySymbolTable());
+        }
 
         @Override
         public void store(MethodReference method, Program program, Supplier<String[]> dependencies) {
@@ -280,7 +293,7 @@ public class IncrementalTest {
         public boolean isStaleClass(String className) {
             ClassReader cls = underlying.get(className);
             if (cls == null) {
-                return true;
+                return false;
             }
 
             return cls.getAnnotations().get(Update.class.getName()) != null;

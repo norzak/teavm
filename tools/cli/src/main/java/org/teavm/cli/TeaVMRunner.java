@@ -78,6 +78,10 @@ public final class TeaVMRunner {
                 .withLongOpt("minify")
                 .create("m"));
         options.addOption(OptionBuilder
+                .withDescription("causes TeaVM to produce code that is as close to Java semantics as possible "
+                        + "(in cost of performance)")
+                .create("strict"));
+        options.addOption(OptionBuilder
                 .withDescription("optimization level (1-3)")
                 .hasArg()
                 .withArgName("number")
@@ -132,7 +136,24 @@ public final class TeaVMRunner {
                 .withLongOpt("min-heap")
                 .withArgName("size")
                 .hasArg()
-                .withDescription("Minimum heap size in bytes (for C and WebAssembly)")
+                .withDescription("Minimum heap size in megabytes (for C and WebAssembly)")
+                .create());
+        options.addOption(OptionBuilder
+                .withLongOpt("max-heap")
+                .withArgName("size")
+                .hasArg()
+                .withDescription("Maximum heap size in megabytes (for C and WebAssembly)")
+                .create());
+        options.addOption(OptionBuilder
+                .withLongOpt("max-toplevel-names")
+                .withArgName("number")
+                .hasArg()
+                .withDescription("Maximum number of names kept in top-level scope ("
+                        + "other will be put in a separate object. 10000 by default.")
+                .create());
+        options.addOption(OptionBuilder
+                .withLongOpt("no-longjmp")
+                .withDescription("Don't use setjmp/longjmp functions to emulate exceptions (C target)")
                 .create());
     }
 
@@ -168,8 +189,9 @@ public final class TeaVMRunner {
         parsePreserveClassOptions();
         parseOptimizationOption();
         parseIncrementalOptions();
-        parseJavaScriptOptions();
+        parseGenerationOptions();
         parseWasmOptions();
+        parseCOptions();
         parseHeap();
 
         if (commandLine.hasOption("e")) {
@@ -214,11 +236,17 @@ public final class TeaVMRunner {
         }
     }
 
-    private void parseJavaScriptOptions() {
-        if (commandLine.hasOption("m")) {
-            tool.setMinifying(true);
-        } else {
-            tool.setMinifying(false);
+    private void parseGenerationOptions() {
+        tool.setObfuscated(commandLine.hasOption("m"));
+        tool.setStrict(commandLine.hasOption("strict"));
+
+        if (commandLine.hasOption("max-toplevel-names")) {
+            try {
+                tool.setMaxTopLevelNames(Integer.parseInt(commandLine.getOptionValue("max-toplevel-names")));
+            } catch (NumberFormatException e) {
+                System.err.println("'--max-toplevel-names' must be integer number");
+                printUsage();
+            }
         }
     }
 
@@ -301,6 +329,15 @@ public final class TeaVMRunner {
         }
     }
 
+    private void parseCOptions() {
+        if (commandLine.hasOption("no-longjmp")) {
+            tool.setLongjmpSupported(false);
+        }
+        if (commandLine.hasOption("heap-dump")) {
+            tool.setHeapDump(true);
+        }
+    }
+
     private void parseHeap() {
         if (commandLine.hasOption("min-heap")) {
             int size;
@@ -311,7 +348,18 @@ public final class TeaVMRunner {
                 printUsage();
                 return;
             }
-            tool.setMinHeapSize(size);
+            tool.setMinHeapSize(size * 1024 * 1024);
+        }
+        if (commandLine.hasOption("max-heap")) {
+            int size;
+            try {
+                size = Integer.parseInt(commandLine.getOptionValue("max-heap"));
+            } catch (NumberFormatException e) {
+                System.err.print("Wrong heap size");
+                printUsage();
+                return;
+            }
+            tool.setMaxHeapSize(size * 1024 * 1024);
         }
     }
 

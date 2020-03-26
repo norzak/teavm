@@ -29,6 +29,8 @@ class VirtualCallConsumer implements DependencyConsumer {
     private final BitSet knownTypes = new BitSet();
     private DependencyGraphBuilder.ExceptionConsumer exceptionConsumer;
     private DependencyTypeFilter filter;
+    private boolean isPolymorphic;
+    private MethodDependency monomorphicCall;
 
     VirtualCallConsumer(DependencyNode node, String filterClass,
             MethodDescriptor methodDesc, DependencyAnalyzer analyzer, DependencyNode[] parameters,
@@ -56,19 +58,31 @@ class VirtualCallConsumer implements DependencyConsumer {
         knownTypes.set(type.index);
 
         String className = type.getName();
+        /*
         if (DependencyAnalyzer.shouldLog) {
             System.out.println("Virtual call of " + methodDesc + " detected on " + node.getTag() + ". "
                     + "Target class is " + className);
         }
+
+         */
         if (className.startsWith("[")) {
             className = "java.lang.Object";
-            type = analyzer.getType(className);
         }
 
         MethodDependency methodDep = analyzer.linkMethod(className, methodDesc);
         methodDep.addLocation(location);
         if (!methodDep.isMissing()) {
-            methodDep.use();
+            methodDep.use(false);
+            if (isPolymorphic) {
+                methodDep.external = true;
+            } else if (monomorphicCall == null) {
+                monomorphicCall = methodDep;
+            } else {
+                monomorphicCall.external = true;
+                monomorphicCall = null;
+                methodDep.external = true;
+                isPolymorphic = true;
+            }
             DependencyNode[] targetParams = methodDep.getVariables();
             if (parameters[0] != null && targetParams[0] != null) {
                 parameters[0].connect(targetParams[0],

@@ -24,12 +24,8 @@ import org.teavm.runtime.RuntimeObject;
 @StaticInit
 @Unmanaged
 public final class WasmRuntime {
-    public static Address stack = initStack();
-
     private WasmRuntime() {
     }
-
-    private static native Address initStack();
 
     public static int compare(int a, int b) {
         return gt(a, b) ? 1 : lt(a, b) ? -1 : 0;
@@ -80,27 +76,51 @@ public final class WasmRuntime {
         return Address.fromInt(value);
     }
 
+    public static int align(int value, int alignment) {
+        if (value == 0) {
+            return value;
+        }
+        value = ((value - 1) / alignment + 1) * alignment;
+        return value;
+    }
+
     @Import(name = "print", module = "spectest")
     public static native void print(int a);
 
+    @Import(name = "logString", module = "teavm")
+    public static native void printString(String s);
+
+    @Import(name = "logInt", module = "teavm")
+    public static native void printInt(int i);
+
+    @Import(name = "logOutOfMemory", module = "teavm")
+    public static native void printOutOfMemory();
+
     public static void fillZero(Address address, int count) {
+        fill(address, (byte) 0, count);
+    }
+
+    public static void fill(Address address, byte value, int count) {
+        int value4 = (value & 0xFF << 24) | (value & 0xFF << 16) | (value & 0xFF << 8) | (value & 0xFF);
         int start = address.toInt();
 
         int alignedStart = start >>> 2 << 2;
         address = Address.fromInt(alignedStart);
         switch (start - alignedStart) {
             case 0:
-                address.putInt(0);
+                address.putInt(value4);
                 break;
             case 1:
-                address.add(1).putByte((byte) 0);
-                address.add(2).putShort((short) 0);
+                address.add(1).putByte(value);
+                address.add(2).putByte(value);
+                address.add(3).putByte(value);
                 break;
             case 2:
-                address.add(2).putShort((short) 0);
+                address.add(2).putByte(value);
+                address.add(3).putByte(value);
                 break;
             case 3:
-                address.add(3).putByte((byte) 0);
+                address.add(3).putByte(value);
                 break;
         }
 
@@ -111,19 +131,21 @@ public final class WasmRuntime {
             case 0:
                 break;
             case 1:
-                address.putByte((byte) 0);
+                address.putByte(value);
                 break;
             case 2:
-                address.putShort((short) 0);
+                address.putByte(value);
+                address.add(1).putByte(value);
                 break;
             case 3:
-                address.putShort((short) 0);
-                address.add(2).putByte((byte) 0);
+                address.putByte(value);
+                address.add(1).putByte(value);
+                address.add(2).putByte(value);
                 break;
         }
 
         for (address = Address.fromInt(alignedStart + 4); address.toInt() < alignedEnd; address = address.add(4)) {
-            address.putInt(0);
+            address.putInt(value4);
         }
     }
 
@@ -243,20 +265,22 @@ public final class WasmRuntime {
     }
 
     public static Address allocStack(int size) {
+        Address stack = WasmHeap.stack;
         Address result = stack.add(4);
         stack = result.add((size << 2) + 4);
         stack.putInt(size);
+        WasmHeap.stack = stack;
         return result;
     }
 
     public static Address getStackTop() {
-        return stack != initStack() ? stack : null;
+        return WasmHeap.stack != WasmHeap.stackAddress ? WasmHeap.stack : null;
     }
 
     public static Address getNextStackFrame(Address stackFrame) {
         int size = stackFrame.getInt() + 2;
         Address result = stackFrame.add(-size * 4);
-        if (result == initStack()) {
+        if (result == WasmHeap.stackAddress) {
             result = null;
         }
         return result;

@@ -27,16 +27,15 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
-import org.teavm.model.ClassReaderSource;
 import org.teavm.model.MethodReference;
 import org.teavm.model.Program;
 import org.teavm.model.ProgramCache;
+import org.teavm.model.ReferenceCache;
 
 public class DiskProgramCache implements ProgramCache {
     private File directory;
@@ -44,9 +43,10 @@ public class DiskProgramCache implements ProgramCache {
     private Map<MethodReference, Item> cache = new HashMap<>();
     private Set<MethodReference> newMethods = new HashSet<>();
 
-    public DiskProgramCache(File directory, SymbolTable symbolTable, SymbolTable fileTable) {
+    public DiskProgramCache(File directory, ReferenceCache referenceCache, SymbolTable symbolTable,
+            SymbolTable fileTable, SymbolTable variableTable) {
         this.directory = directory;
-        programIO = new ProgramIO(symbolTable, fileTable);
+        programIO = new ProgramIO(referenceCache, symbolTable, fileTable, variableTable);
     }
 
     @Override
@@ -88,8 +88,7 @@ public class DiskProgramCache implements ProgramCache {
         newMethods.add(method);
     }
 
-    public void flush(ClassReaderSource classSource) throws IOException {
-        Date currentTime = new Date();
+    public void flush() throws IOException {
         for (MethodReference method : newMethods) {
             Item item = cache.get(method);
             File file = getMethodFile(method);

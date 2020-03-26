@@ -115,6 +115,9 @@ public interface HTMLElement extends Element, ElementCSSInlineStyle, EventTarget
     int getScrollHeight();
 
     @JSProperty
+    int getOffsetWidth();
+
+    @JSProperty
     int getOffsetHeight();
 
     @JSProperty
@@ -132,6 +135,12 @@ public interface HTMLElement extends Element, ElementCSSInlineStyle, EventTarget
 
     @JSProperty
     void setInnerHTML(String content);
+
+    @JSProperty
+    String getInnerText();
+
+    @JSProperty
+    void setInnerText(String content);
 
     TextRectangle getBoundingClientRect();
 
@@ -188,6 +197,4 @@ public interface HTMLElement extends Element, ElementCSSInlineStyle, EventTarget
     NodeList<? extends HTMLElement> querySelectorAll(String selectors);
 
     void requestPointerLock();
-
-    void exitPointerLock();
 }

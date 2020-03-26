@@ -18,24 +18,16 @@ package org.teavm.ast.decompilation;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import org.teavm.ast.AsyncMethodNode;
 import org.teavm.ast.AsyncMethodPart;
 import org.teavm.ast.BlockStatement;
-import org.teavm.ast.ClassNode;
-import org.teavm.ast.FieldNode;
 import org.teavm.ast.GotoPartStatement;
 import org.teavm.ast.IdentifiedStatement;
-import org.teavm.ast.MethodNode;
-import org.teavm.ast.NativeMethodNode;
 import org.teavm.ast.RegularMethodNode;
 import org.teavm.ast.SequentialStatement;
 import org.teavm.ast.Statement;
@@ -43,31 +35,20 @@ import org.teavm.ast.TryCatchStatement;
 import org.teavm.ast.VariableNode;
 import org.teavm.ast.WhileStatement;
 import org.teavm.ast.optimization.Optimizer;
-import org.teavm.backend.javascript.spi.GeneratedBy;
-import org.teavm.backend.javascript.spi.Generator;
-import org.teavm.backend.javascript.spi.InjectedBy;
-import org.teavm.cache.AstDependencyExtractor;
-import org.teavm.cache.CacheStatus;
-import org.teavm.cache.MethodNodeCache;
 import org.teavm.common.Graph;
 import org.teavm.common.GraphIndexer;
 import org.teavm.common.Loop;
 import org.teavm.common.LoopGraph;
 import org.teavm.common.RangeTree;
-import org.teavm.interop.PlatformMarker;
-import org.teavm.model.AnnotationHolder;
 import org.teavm.model.BasicBlock;
-import org.teavm.model.ClassHolder;
 import org.teavm.model.ClassHolderSource;
-import org.teavm.model.ElementModifier;
-import org.teavm.model.FieldHolder;
 import org.teavm.model.Instruction;
 import org.teavm.model.MethodHolder;
 import org.teavm.model.MethodReference;
 import org.teavm.model.Program;
 import org.teavm.model.TextLocation;
 import org.teavm.model.TryCatchBlock;
-import org.teavm.model.ValueType;
+import org.teavm.model.instructions.AssignInstruction;
 import org.teavm.model.instructions.BinaryBranchingInstruction;
 import org.teavm.model.instructions.BranchingInstruction;
 import org.teavm.model.instructions.JumpInstruction;
@@ -78,59 +59,29 @@ import org.teavm.model.util.TypeInferer;
 
 public class Decompiler {
     private ClassHolderSource classSource;
-    private ClassLoader classLoader;
-    private CacheStatus cacheStatus;
     private Graph graph;
     private LoopGraph loopGraph;
     private GraphIndexer indexer;
-    private int[] loops;
     private int[] loopSuccessors;
-    private Block[] blockMap;
     private boolean[] exceptionHandlers;
     private int lastBlockId;
     private RangeTree codeTree;
     private RangeTree.Node currentNode;
     private RangeTree.Node parentNode;
-    private Map<MethodReference, Generator> generators = new HashMap<>();
-    private Set<MethodReference> methodsToSkip = new HashSet<>();
-    private MethodNodeCache regularMethodCache;
-    private Set<MethodReference> asyncMethods;
-    private Set<MethodReference> splitMethods = new HashSet<>();
+    private Set<MethodReference> splitMethods;
     private List<TryCatchBookmark> tryCatchBookmarks = new ArrayList<>();
-    private final AstDependencyExtractor astDependencyExtractor = new AstDependencyExtractor();
     private Deque<Block> stack;
     private Program program;
     private boolean friendlyToDebugger;
-    private boolean moveConstants;
 
-    public Decompiler(ClassHolderSource classSource, ClassLoader classLoader,
-            CacheStatus cacheStatus, Set<MethodReference> asyncMethods, Set<MethodReference> asyncFamilyMethods,
-            boolean friendlyToDebugger, boolean moveConstants) {
+    public Decompiler(ClassHolderSource classSource, Set<MethodReference> splitMethods, boolean friendlyToDebugger) {
         this.classSource = classSource;
-        this.classLoader = classLoader;
-        this.cacheStatus = cacheStatus;
-        this.asyncMethods = asyncMethods;
-        splitMethods.addAll(asyncMethods);
-        splitMethods.addAll(asyncFamilyMethods);
+        this.splitMethods = splitMethods;
         this.friendlyToDebugger = friendlyToDebugger;
-        this.moveConstants = moveConstants;
-    }
-
-    public MethodNodeCache getRegularMethodCache() {
-        return regularMethodCache;
-    }
-
-    public void setRegularMethodCache(MethodNodeCache regularMethodCache) {
-        this.regularMethodCache = regularMethodCache;
-    }
-
-    public int getGraphSize() {
-        return this.graph.size();
     }
 
     static class Block {
         Block parent;
-        int parentOffset;
         final IdentifiedStatement statement;
         final List<Statement> body;
         final int end;
@@ -147,24 +98,6 @@ public class Decompiler {
             this.start = start;
             this.end = end;
         }
-
-        void installTo(int index, Block[] blockMap) {
-            if (nodeBackup == null) {
-                nodeToRestore = index;
-                nodeBackup = blockMap[index];
-            } else {
-                nodeToRestore2 = index;
-                nodeBackup2 = blockMap[index];
-            }
-            blockMap[index] = this;
-        }
-
-        void removeFrom(Block[] blockMap) {
-            blockMap[nodeToRestore] = nodeBackup;
-            if (nodeToRestore2 >= 0) {
-                blockMap[nodeToRestore2] = nodeBackup2;
-            }
-        }
     }
 
     static class TryCatchBookmark {
@@ -175,130 +108,7 @@ public class Decompiler {
         int exceptionHandler;
     }
 
-    public List<ClassNode> decompile(Collection<String> classNames) {
-        List<String> sequence = new ArrayList<>();
-        Set<String> visited = new HashSet<>();
-        for (String className : classNames) {
-            orderClasses(className, visited, sequence);
-        }
-        final List<ClassNode> result = new ArrayList<>();
-        for (int i = 0; i < sequence.size(); ++i) {
-            final String className = sequence.get(i);
-            result.add(decompile(classSource.get(className)));
-        }
-        return result;
-    }
-
-    public List<String> getClassOrdering(Collection<String> classNames) {
-        List<String> sequence = new ArrayList<>();
-        Set<String> visited = new HashSet<>();
-        for (String className : classNames) {
-            orderClasses(className, visited, sequence);
-        }
-        return sequence;
-    }
-
-    public void addGenerator(MethodReference method, Generator generator) {
-        generators.put(method, generator);
-    }
-
-    public void addMethodToSkip(MethodReference method) {
-        methodsToSkip.add(method);
-    }
-
-    private void orderClasses(String className, Set<String> visited, List<String> order) {
-        if (!visited.add(className)) {
-            return;
-        }
-        ClassHolder cls = classSource.get(className);
-        if (cls == null) {
-            return;
-        }
-        if (cls.getParent() != null) {
-            orderClasses(cls.getParent(), visited, order);
-        }
-        for (String iface : cls.getInterfaces()) {
-            orderClasses(iface, visited, order);
-        }
-        order.add(className);
-    }
-
-    public ClassNode decompile(ClassHolder cls) {
-        ClassNode clsNode = new ClassNode(cls.getName(), cls.getParent());
-        for (FieldHolder field : cls.getFields()) {
-            FieldNode fieldNode = new FieldNode(field.getReference(), field.getType());
-            fieldNode.getModifiers().addAll(field.getModifiers());
-            fieldNode.setInitialValue(field.getInitialValue());
-            clsNode.getFields().add(fieldNode);
-        }
-        for (MethodHolder method : cls.getMethods()) {
-            if (method.getModifiers().contains(ElementModifier.ABSTRACT)) {
-                continue;
-            }
-            if ((!isBootstrap() && method.getAnnotations().get(InjectedBy.class.getName()) != null)
-                    || methodsToSkip.contains(method.getReference())) {
-                continue;
-            }
-            MethodNode methodNode = decompile(method);
-            clsNode.getMethods().add(methodNode);
-        }
-        clsNode.getInterfaces().addAll(cls.getInterfaces());
-        clsNode.getModifiers().addAll(cls.getModifiers());
-        clsNode.setAccessLevel(cls.getLevel());
-        return clsNode;
-    }
-
-    public MethodNode decompile(MethodHolder method) {
-        return method.getModifiers().contains(ElementModifier.NATIVE) ? decompileNative(method)
-                : !asyncMethods.contains(method.getReference()) ? decompileRegular(method) : decompileAsync(method);
-    }
-
-    public NativeMethodNode decompileNative(MethodHolder method) {
-        Generator generator = generators.get(method.getReference());
-        if (generator == null && !isBootstrap()) {
-            AnnotationHolder annotHolder = method.getAnnotations().get(GeneratedBy.class.getName());
-            if (annotHolder == null) {
-                throw new DecompilationException("Method " + method.getOwnerName() + "." + method.getDescriptor()
-                        + " is native, but no " + GeneratedBy.class.getName() + " annotation found");
-            }
-            ValueType annotValue = annotHolder.getValues().get("value").getJavaClass();
-            String generatorClassName = ((ValueType.Object) annotValue).getClassName();
-            try {
-                Class<?> generatorClass = Class.forName(generatorClassName, true, classLoader);
-                generator = (Generator) generatorClass.newInstance();
-            } catch (ClassNotFoundException | InstantiationException | IllegalAccessException e) {
-                throw new DecompilationException("Error instantiating generator " + generatorClassName
-                        + " for native method " + method.getOwnerName() + "." + method.getDescriptor());
-            }
-        }
-        NativeMethodNode methodNode = new NativeMethodNode(method.getReference());
-        methodNode.getModifiers().addAll(method.getModifiers());
-        methodNode.setGenerator(generator);
-        methodNode.setAsync(asyncMethods.contains(method.getReference()));
-        return methodNode;
-    }
-
-    @PlatformMarker
-    private static boolean isBootstrap() {
-        return false;
-    }
-
     public RegularMethodNode decompileRegular(MethodHolder method) {
-        if (regularMethodCache == null) {
-            return decompileRegularCacheMiss(method);
-        }
-        RegularMethodNode node = !cacheStatus.isStaleMethod(method.getReference())
-                ? regularMethodCache.get(method.getReference(), cacheStatus)
-                : null;
-        if (node == null) {
-            node = decompileRegularCacheMiss(method);
-            RegularMethodNode finalNode = node;
-            regularMethodCache.store(method.getReference(), node, () -> astDependencyExtractor.extract(finalNode));
-        }
-        return node;
-    }
-
-    public RegularMethodNode decompileRegularCacheMiss(MethodHolder method) {
         RegularMethodNode methodNode = new RegularMethodNode(method.getReference());
         Program program = method.getProgram();
         int[] targetBlocks = new int[program.basicBlockCount()];
@@ -319,7 +129,7 @@ public class Decompiler {
             methodNode.getVariables().add(variable);
         }
 
-        Optimizer optimizer = new Optimizer(moveConstants);
+        Optimizer optimizer = new Optimizer();
         optimizer.optimize(methodNode, method.getProgram(), friendlyToDebugger);
         methodNode.getModifiers().addAll(method.getModifiers());
 
@@ -327,21 +137,6 @@ public class Decompiler {
     }
 
     public AsyncMethodNode decompileAsync(MethodHolder method) {
-        if (regularMethodCache == null) {
-            return decompileAsyncCacheMiss(method);
-        }
-        AsyncMethodNode node = !cacheStatus.isStaleMethod(method.getReference())
-                ? regularMethodCache.getAsync(method.getReference(), cacheStatus)
-                : null;
-        if (node == null) {
-            node = decompileAsyncCacheMiss(method);
-            AsyncMethodNode finalNode = node;
-            regularMethodCache.storeAsync(method.getReference(), node, () -> astDependencyExtractor.extract(finalNode));
-        }
-        return node;
-    }
-
-    private AsyncMethodNode decompileAsyncCacheMiss(MethodHolder method) {
         AsyncMethodNode node = new AsyncMethodNode(method.getReference());
         AsyncProgramSplitter splitter = new AsyncProgramSplitter(classSource, splitMethods);
         splitter.split(method.getProgram());
@@ -367,7 +162,7 @@ public class Decompiler {
             node.getVariables().add(variable);
         }
 
-        Optimizer optimizer = new Optimizer(moveConstants);
+        Optimizer optimizer = new Optimizer();
         optimizer.optimize(node, splitter, friendlyToDebugger);
         node.getModifiers().addAll(method.getModifiers());
 
@@ -392,16 +187,14 @@ public class Decompiler {
         graph = indexer.getGraph();
         loopGraph = new LoopGraph(this.graph);
         unflatCode();
-        blockMap = new Block[program.basicBlockCount() * 2 + 1];
         stack = new ArrayDeque<>();
         this.program = program;
         BlockStatement rootStmt = new BlockStatement();
         rootStmt.setId("root");
-        stack.push(new Block(rootStmt, rootStmt.getBody(), -1, -1));
+        stack.push(new Block(rootStmt, rootStmt.getBody(), -1, Integer.MAX_VALUE));
         StatementGenerator generator = new StatementGenerator();
         generator.classSource = classSource;
         generator.program = program;
-        generator.blockMap = blockMap;
         generator.indexer = indexer;
         parentNode = codeTree.getRoot();
         currentNode = parentNode.getFirstChild();
@@ -409,18 +202,7 @@ public class Decompiler {
         fillExceptionHandlers(program);
         for (int i = 0; i < this.graph.size(); ++i) {
             int node = i < indexer.size() ? indexer.nodeAt(i) : -1;
-            int next = i + 1;
-            int head = loops[i];
-            if (head != -1 && loopSuccessors[head] == next) {
-                next = head;
-            }
-
-            if (node >= 0) {
-                generator.currentBlock = program.basicBlockAt(node);
-                int tmp = indexer.nodeAt(next);
-                generator.nextBlock = tmp >= 0 && next < indexer.size() ? program.basicBlockAt(tmp) : null;
-            }
-
+            BasicBlock basicBlock = node >= 0 ? program.basicBlockAt(node) : null;
             Block block = stack.peek();
 
             while (parentNode.getEnd() == i) {
@@ -430,16 +212,18 @@ public class Decompiler {
             for (Block newBlock : createBlocks(i)) {
                 block.body.add(newBlock.statement);
                 newBlock.parent = block;
-                newBlock.parentOffset = block.body.size();
                 stack.push(newBlock);
                 block = newBlock;
             }
-            createNewBookmarks(generator.currentBlock.getTryCatchBlocks());
+            if (basicBlock != null) {
+                createNewBookmarks(basicBlock.getTryCatchBlocks());
+            }
+            generator.currentBlock = block;
 
-            if (node >= 0) {
+            if (basicBlock != null) {
                 generator.statements.clear();
                 TextLocation lastLocation = null;
-                for (Instruction insn : generator.currentBlock) {
+                for (Instruction insn : basicBlock) {
                     if (insn.getLocation() != null && lastLocation != insn.getLocation()) {
                         lastLocation = insn.getLocation();
                     }
@@ -457,25 +241,21 @@ public class Decompiler {
                 block.body.addAll(generator.statements);
             }
 
-            List<Runnable> deferred = new ArrayList<>();
             while (block.end == i + 1) {
                 Block oldBlock = block;
                 stack.pop();
                 block = stack.peek();
-                if (block.start >= 0) {
-                    int mappedStart = indexer.nodeAt(block.start);
-                    if (blockMap[mappedStart] == oldBlock) {
-                        blockMap[mappedStart] = block;
-                    }
-                }
 
-                for (int j = 0; j < oldBlock.tryCatches.size(); ++j) {
+                for (int j = oldBlock.tryCatches.size() - 1; j >= 0; --j) {
                     TryCatchBookmark bookmark = oldBlock.tryCatches.get(j);
                     TryCatchStatement tryCatchStmt = new TryCatchStatement();
                     tryCatchStmt.setExceptionType(bookmark.exceptionType);
                     tryCatchStmt.setExceptionVariable(bookmark.exceptionVariable);
-                    tryCatchStmt.getHandler().add(generator.generateJumpStatement(
-                            program.basicBlockAt(bookmark.exceptionHandler)));
+                    Statement handlerStatement = generator.generateJumpStatement(block,
+                            program.basicBlockAt(bookmark.exceptionHandler));
+                    if (handlerStatement != null) {
+                        tryCatchStmt.getHandler().add(handlerStatement);
+                    }
                     List<Statement> blockPart = oldBlock.body.subList(bookmark.offset, oldBlock.body.size());
                     tryCatchStmt.getProtectedBody().addAll(blockPart);
                     blockPart.clear();
@@ -487,14 +267,16 @@ public class Decompiler {
                 tryCatchBookmarks.subList(tryCatchBookmarks.size() - oldBlock.tryCatches.size(),
                         tryCatchBookmarks.size()).clear();
                 oldBlock.tryCatches.clear();
-                oldBlock.removeFrom(blockMap);
-            }
-            for (Runnable r : deferred) {
-                r.run();
             }
 
-            if (generator.nextBlock != null && !isTrivialBlock(generator.nextBlock)) {
-                closeExpiredBookmarks(generator, generator.nextBlock.getTryCatchBlocks());
+            if (i < this.graph.size() - 1) {
+                int nextNode = indexer.nodeAt(i + 1);
+                if (nextNode >= 0 && nextNode < program.basicBlockCount()) {
+                    BasicBlock nextBlock = program.basicBlockAt(nextNode);
+                    if (!isTrivialBlock(nextBlock)) {
+                        closeExpiredBookmarks(generator, nextBlock.getTryCatchBlocks());
+                    }
+                }
             }
         }
 
@@ -518,13 +300,24 @@ public class Decompiler {
         if (exceptionHandlers[block.getIndex()]) {
             return false;
         }
-        if (block.instructionCount() != 1 || block.getExceptionVariable() != null) {
+        if (block.getExceptionVariable() != null) {
             return false;
         }
         Instruction instruction = block.getLastInstruction();
-        return instruction instanceof JumpInstruction
-                || instruction instanceof BranchingInstruction
-                || instruction instanceof BinaryBranchingInstruction;
+        if (!(instruction instanceof JumpInstruction)
+                && !(instruction instanceof BranchingInstruction)
+                && !(instruction instanceof BinaryBranchingInstruction)) {
+            return false;
+        }
+
+        while (instruction.getPrevious() != null) {
+            instruction = instruction.getPrevious();
+            if (!(instruction instanceof AssignInstruction)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void closeExpiredBookmarks(StatementGenerator generator, List<TryCatchBlock> tryCatchBlocks) {
@@ -553,37 +346,42 @@ public class Decompiler {
             removedBookmarks.add(bookmark);
         }
 
-        Collections.reverse(removedBookmarks);
-        for (TryCatchBookmark bookmark : removedBookmarks) {
+        if (!removedBookmarks.isEmpty()) {
+            Collections.reverse(removedBookmarks);
             Block block = stack.peek();
-            while (block != bookmark.block) {
-                if (block.body.size() > 1) {
+
+            int lastBookmark = removedBookmarks.size() - 1;
+            boolean first = true;
+            while (lastBookmark >= 0) {
+                for (int j = lastBookmark; j >= 0; --j) {
+                    TryCatchBookmark bookmark = removedBookmarks.get(j);
+
                     TryCatchStatement tryCatchStmt = new TryCatchStatement();
                     tryCatchStmt.setExceptionType(bookmark.exceptionType);
                     tryCatchStmt.setExceptionVariable(bookmark.exceptionVariable);
-                    tryCatchStmt.getHandler().add(generator.generateJumpStatement(
-                            program.basicBlockAt(bookmark.exceptionHandler)));
-                    List<Statement> body = block.body.subList(0, block.body.size() - 1);
+                    Statement handlerStatement = generator.generateJumpStatement(block,
+                            program.basicBlockAt(bookmark.exceptionHandler));
+                    if (handlerStatement != null) {
+                        tryCatchStmt.getHandler().add(handlerStatement);
+                    }
+
+                    List<Statement> body = first ? block.body : block.body.subList(0, block.body.size() - 1);
+                    if (bookmark.block == block) {
+                        body = body.subList(bookmark.offset, body.size());
+                        lastBookmark = j - 1;
+                    }
                     tryCatchStmt.getProtectedBody().addAll(body);
-                    body.clear();
-                    body.add(tryCatchStmt);
+                    if (!body.isEmpty()) {
+                        body.clear();
+                        body.add(tryCatchStmt);
+                    }
                 }
+
+                block.tryCatches.removeAll(removedBookmarks);
+
                 block = block.parent;
+                first = false;
             }
-            TryCatchStatement tryCatchStmt = new TryCatchStatement();
-            tryCatchStmt.setExceptionType(bookmark.exceptionType);
-            tryCatchStmt.setExceptionVariable(bookmark.exceptionVariable);
-            Statement jumpToHandler = generator.generateJumpStatement(program.basicBlockAt(bookmark.exceptionHandler));
-            if (jumpToHandler != null) {
-                tryCatchStmt.getHandler().add(jumpToHandler);
-            }
-            List<Statement> blockPart = block.body.subList(bookmark.offset, block.body.size());
-            tryCatchStmt.getProtectedBody().addAll(blockPart);
-            blockPart.clear();
-            if (!tryCatchStmt.getProtectedBody().isEmpty()) {
-                blockPart.add(tryCatchStmt);
-            }
-            block.tryCatches.remove(bookmark);
         }
 
         tryCatchBookmarks.subList(start, tryCatchBookmarks.size()).clear();
@@ -591,16 +389,31 @@ public class Decompiler {
 
     private void createNewBookmarks(List<TryCatchBlock> tryCatchBlocks) {
         // Add new bookmarks
+        Block previousRoot = null;
         for (int i = tryCatchBookmarks.size(); i < tryCatchBlocks.size(); ++i) {
             TryCatchBlock tryCatch = tryCatchBlocks.get(tryCatchBlocks.size() - 1 - i);
             TryCatchBookmark bookmark = new TryCatchBookmark();
-            bookmark.block = stack.peek();
-            bookmark.offset = bookmark.block.body.size();
+
+            Block block = stack.peek();
+            int offset = block.body.size();
+
+            if (offset == 0 && block != previousRoot) {
+                while (block.parent != previousRoot
+                        && block.parent.start == block.start
+                        && block.end < indexer.indexOf(tryCatch.getHandler().getIndex())
+                        && block.parent.body.size() == 1) {
+                    block = block.parent;
+                }
+            }
+            previousRoot = block;
+
+            bookmark.block = block;
+            bookmark.offset = offset;
             bookmark.exceptionHandler = tryCatch.getHandler().getIndex();
             bookmark.exceptionType = tryCatch.getExceptionType();
             bookmark.exceptionVariable = tryCatch.getHandler().getExceptionVariable() != null
                     ? tryCatch.getHandler().getExceptionVariable().getIndex() : null;
-            bookmark.block.tryCatches.add(bookmark);
+            block.tryCatches.add(bookmark);
             tryCatchBookmarks.add(bookmark);
         }
     }
@@ -610,26 +423,16 @@ public class Decompiler {
         while (currentNode != null && currentNode.getStart() == start) {
             Block block;
             IdentifiedStatement statement;
-            boolean loop = false;
             if (loopSuccessors[start] == currentNode.getEnd() || isSingleBlockLoop(start)) {
                 WhileStatement whileStatement = new WhileStatement();
                 statement = whileStatement;
                 block = new Block(statement, whileStatement.getBody(), start, currentNode.getEnd());
-                loop = true;
             } else {
                 BlockStatement blockStatement = new BlockStatement();
                 statement = blockStatement;
                 block = new Block(statement, blockStatement.getBody(), start, currentNode.getEnd());
             }
             result.add(block);
-            int mappedIndex = indexer.nodeAt(currentNode.getEnd());
-            if (mappedIndex >= 0 && (blockMap[mappedIndex] == null
-                    || !(blockMap[mappedIndex].statement instanceof WhileStatement))) {
-                block.installTo(mappedIndex, blockMap);
-            }
-            if (loop) {
-                block.installTo(indexer.nodeAt(start), blockMap);
-            }
             parentNode = currentNode;
             currentNode = currentNode.getFirstChild();
         }
@@ -666,17 +469,6 @@ public class Decompiler {
 
         // For each node find head of loop this node belongs to.
         //
-        int[] loops = new int[sz];
-        Arrays.fill(loops, -1);
-        for (int head = 0; head < sz; ++head) {
-            int end = loopSuccessors[head];
-            if (end > sz) {
-                continue;
-            }
-            for (int node = head + 1; node < end; ++node) {
-                loops[node] = head;
-            }
-        }
 
         List<RangeTree.Range> ranges = new ArrayList<>();
         for (int node = 0; node < sz; ++node) {
@@ -698,6 +490,5 @@ public class Decompiler {
         }
         codeTree = new RangeTree(sz + 1, ranges);
         this.loopSuccessors = loopSuccessors;
-        this.loops = loops;
     }
 }

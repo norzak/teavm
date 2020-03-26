@@ -37,21 +37,54 @@ TeaVM.wasm = function() {
     function getNativeOffset(instant) {
         return new Date(instant).getTimezoneOffset();
     }
+    function logString(string) {
+        var memory = new DataView(logString.memory.buffer);
+        var arrayPtr = memory.getUint32(string + 8, true);
+        var length = memory.getUint32(arrayPtr + 8, true);
+        for (var i = 0; i < length; ++i) {
+            putwchar(memory.getUint16(i * 2 + arrayPtr + 12, true));
+        }
+    }
+    function logInt(i) {
+        lineBuffer += i.toString();
+    }
 
     function importDefaults(obj) {
         obj.teavm = {
             currentTimeMillis: currentTimeMillis,
+            nanoTime: function() { return performance.now(); },
             isnan: isNaN,
-            TeaVM_getNaN: function() { return NaN; },
+            teavm_getNaN: function() { return NaN; },
             isinf: function(n) { return !isFinite(n) },
             isfinite: isFinite,
             putwchar: putwchar,
             towlower: towlower,
             towupper: towupper,
-            getNativeOffset: getNativeOffset
+            getNativeOffset: getNativeOffset,
+            logString: logString,
+            logInt: logInt,
+            logOutOfMemory: function() { console.log("Out of memory") }
         };
 
         obj.teavmMath = Math;
+
+        obj.teavmHeapTrace = {
+            allocate: function(address, size) {},
+            free: function(address, size) {},
+            assertFree: function(address, size) {},
+            markStarted: function() {},
+            mark: function(address) {},
+            reportDirtyRegion: function(address) {},
+            markCompleted: function() {},
+            move: function(from, to, size) {},
+            gcStarted: function(full) {},
+            sweepStarted: function() {},
+            sweepCompleted: function() {},
+            defragStarted: function() {},
+            defragCompleted: function() {},
+            gcCompleted: function() {},
+            init: function(maxHeap) {}
+        };
     }
 
     function run(path, options) {
@@ -79,6 +112,7 @@ TeaVM.wasm = function() {
             }
 
             WebAssembly.instantiate(response, importObj).then(function(resultObject) {
+                importObj.teavm.logString.memory = resultObject.instance.exports.memory;
                 resultObject.instance.exports.main();
                 callback(resultObject);
             }).catch(function(error) {

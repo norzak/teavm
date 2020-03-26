@@ -51,6 +51,7 @@ import org.teavm.backend.wasm.model.expression.WasmLoadFloat32;
 import org.teavm.backend.wasm.model.expression.WasmLoadFloat64;
 import org.teavm.backend.wasm.model.expression.WasmLoadInt32;
 import org.teavm.backend.wasm.model.expression.WasmLoadInt64;
+import org.teavm.backend.wasm.model.expression.WasmMemoryGrow;
 import org.teavm.backend.wasm.model.expression.WasmReturn;
 import org.teavm.backend.wasm.model.expression.WasmSetLocal;
 import org.teavm.backend.wasm.model.expression.WasmStoreFloat32;
@@ -699,7 +700,14 @@ class WasmCRenderingVisitor implements WasmExpressionVisitor {
         WasmType type = requiredType;
 
         StringBuilder sb = new StringBuilder();
-        sb.append(expression.getFunctionName()).append('(');
+        if (expression.isImported()) {
+            sb.append(!function.getImportModule().isEmpty()
+                    ? function.getImportModule() + "_" + function.getImportName()
+                    : function.getImportName());
+        } else {
+            sb.append(expression.getFunctionName());
+        }
+        sb.append('(');
         translateArguments(expression.getArguments(), function.getParameters(), result, sb);
         sb.append(')');
         result.setText(sb.toString());
@@ -1030,6 +1038,26 @@ class WasmCRenderingVisitor implements WasmExpressionVisitor {
         value = result;
     }
 
+    @Override
+    public void visit(WasmMemoryGrow expression) {
+        CExpression result = new CExpression();
+
+        requiredType = WasmType.INT32;
+        expression.getAmount().acceptVisitor(this);
+        CExpression amount = value;
+
+        if (amount.getLines().isEmpty()) {
+            result.addLine("wasm_heap_size += 65536 * (" + amount.getText() + ");", expression.getLocation());
+        } else {
+            result.addLine("wasm_heap_size += 65536 * (" + amount.getText(), expression.getLocation());
+            result.getLines().addAll(amount.getLines());
+            result.addLine(");", expression.getLocation());
+        }
+
+        result.addLine("wasm_heap = realloc(wasm_heap, wasm_heap_size);");
+        value = result;
+    }
+
     private CExpression checkAddress(CExpression index) {
         if (!memoryAccessChecked) {
             return index;
@@ -1044,7 +1072,7 @@ class WasmCRenderingVisitor implements WasmExpressionVisitor {
         } else {
             var = index.getText();
         }
-        checked.addLine("assert(" + var + " < " + module.getMemorySize() * 65536 + ");");
+        checked.addLine("assert(" + var + " < " + module.getMinMemorySize() * 65536 + ");");
         checked.setText(var);
         checked.setRelocatable(index.isRelocatable());
 

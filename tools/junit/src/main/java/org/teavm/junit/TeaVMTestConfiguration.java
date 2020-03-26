@@ -42,7 +42,7 @@ interface TeaVMTestConfiguration<T extends TeaVMTarget> {
 
         @Override
         public void apply(JavaScriptTarget target) {
-            target.setMinifying(false);
+            target.setObfuscated(false);
         }
     };
 
@@ -59,7 +59,7 @@ interface TeaVMTestConfiguration<T extends TeaVMTarget> {
 
         @Override
         public void apply(JavaScriptTarget target) {
-            target.setMinifying(false);
+            target.setObfuscated(false);
         }
     };
 
@@ -76,7 +76,7 @@ interface TeaVMTestConfiguration<T extends TeaVMTarget> {
 
         @Override
         public void apply(JavaScriptTarget target) {
-            target.setMinifying(true);
+            target.setObfuscated(true);
         }
     };
 
@@ -93,7 +93,6 @@ interface TeaVMTestConfiguration<T extends TeaVMTarget> {
 
         @Override
         public void apply(WasmTarget target) {
-            target.setMinHeapSize(32 * 1024 * 1024);
             target.setWastEmitted(true);
             target.setCEmitted(true);
             target.setDebugging(true);

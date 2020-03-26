@@ -39,6 +39,7 @@ import org.teavm.model.Instruction;
 import org.teavm.model.MethodHolder;
 import org.teavm.model.MethodReference;
 import org.teavm.model.Program;
+import org.teavm.model.ReferenceCache;
 import org.teavm.model.TextLocation;
 import org.teavm.model.ValueType;
 import org.teavm.model.analysis.ClassInference;
@@ -63,7 +64,8 @@ public class DependencyTest {
 
     @BeforeClass
     public static void prepare() {
-        classSource = new ClasspathClassHolderSource(DependencyTest.class.getClassLoader());
+        classSource = new ClasspathClassHolderSource(DependencyTest.class.getClassLoader(),
+                new ReferenceCache());
     }
 
     @AfterClass
@@ -141,13 +143,13 @@ public class DependencyTest {
         MethodHolder method = classSource.get(testMethod.getClassName()).getMethod(testMethod.getDescriptor());
         List<Assertion> assertions = collectAssertions(method);
         processAssertions(assertions, vm.getDependencyInfo().getMethod(testMethod), vm.getDependencyInfo(),
-                method.getProgram());
+                method.getProgram(), vm.getClasses());
     }
 
     private void processAssertions(List<Assertion> assertions, MethodDependencyInfo methodDep,
-            DependencyInfo dependencyInfo, Program program) {
+            DependencyInfo dependencyInfo, Program program, Iterable<? extends String> classNames) {
         ClassInference classInference = new ClassInference(dependencyInfo, new ClassHierarchy(
-                dependencyInfo.getClassSource()));
+                dependencyInfo.getClassSource()), classNames, 10);
         classInference.infer(program, methodDep.getReference());
 
         for (Assertion assertion : assertions) {
@@ -158,10 +160,12 @@ public class DependencyTest {
             Arrays.sort(expectedTypes);
             Assert.assertArrayEquals("Assertion at " + assertion.location, expectedTypes, actualTypes);
 
-            actualTypes = classInference.classesOf(assertion.value);
-            Arrays.sort(actualTypes);
-            Assert.assertArrayEquals("Assertion at " + assertion.location + " (class inference)",
-                    expectedTypes, actualTypes);
+            if (!classInference.isOverflow(assertion.value)) {
+                Set<String> actualTypeSet = new HashSet<>(Arrays.asList(classInference.classesOf(assertion.value)));
+                Assert.assertTrue("Assertion at " + assertion.location + " (class inference), "
+                        + "expected: " + Arrays.toString(expectedTypes) + ", actual: " + actualTypeSet,
+                        actualTypeSet.containsAll(Arrays.asList(expectedTypes)));
+            }
         }
     }
 

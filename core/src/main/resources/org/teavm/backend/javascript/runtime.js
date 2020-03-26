@@ -24,7 +24,7 @@ function $rt_nextId() {
     return x;
 }
 function $rt_compare(a, b) {
-    return a > b ? 1 : a < b ? -1 : 0;
+    return a > b ? 1 : a < b ? -1 : a === b ? 0 : 1;
 }
 function $rt_isInstance(obj, cls) {
     return obj !== null && !!obj.constructor.$meta && $rt_isAssignable(obj.constructor, cls);
@@ -32,6 +32,9 @@ function $rt_isInstance(obj, cls) {
 function $rt_isAssignable(from, to) {
     if (from === to) {
         return true;
+    }
+    if (to.$meta.item !== null) {
+        return from.$meta.item !== null && $rt_isAssignable(from.$meta.item, to.$meta.item);
     }
     var supertypes = from.$meta.supertypes;
     for (var i = 0; i < supertypes.length; i = (i + 1) | 0) {
@@ -41,92 +44,122 @@ function $rt_isAssignable(from, to) {
     }
     return false;
 }
+Array.prototype.fill = Array.prototype.fill || function(value,start,end) {
+    var len = this.length;
+    if (!len) return this;
+    start = start | 0;
+    var i = start < 0
+        ? Math.max(len + start, 0)
+        : Math.min(start, len);
+    end = end === undefined ? len : end | 0;
+    end = end < 0
+        ? Math.max(len + end, 0)
+        : Math.min(end, len);
+    for (; i < end; i++) {
+        this[i] = value;
+    }
+    return this;
+};
 function $rt_createArray(cls, sz) {
     var data = new Array(sz);
-    var arr = new ($rt_arraycls(cls))(data);
-    if (sz > 0) {
-        var i = 0;
-        do {
-            data[i] = null;
-            i = (i + 1) | 0;
-        } while (i < sz);
-    }
-    return arr;
+    data.fill(null);
+    return new $rt_array(cls, data);
+}
+function $rt_createArrayFromData(cls, init) {
+    return $rt_wrapArray(cls, init);
 }
 function $rt_wrapArray(cls, data) {
-    return new ($rt_arraycls(cls))(data);
+    return new $rt_array(cls, data);
 }
 function $rt_createUnfilledArray(cls, sz) {
-    return new ($rt_arraycls(cls))(new Array(sz));
+    return new $rt_array(cls, new Array(sz));
 }
 function $rt_createLongArray(sz) {
     var data = new Array(sz);
-    var arr = new ($rt_arraycls($rt_longcls()))(data);
-    for (var i = 0; i < sz; i = (i + 1) | 0) {
-        data[i] = Long_ZERO;
-    }
+    var arr = new $rt_array($rt_longcls(), data);
+    data.fill(Long_ZERO);
     return arr;
 }
+function $rt_createLongArrayFromData(init) {
+    return new $rt_array($rt_longcls(), init);
+}
 function $rt_createNumericArray(cls, nativeArray) {
-    return new ($rt_arraycls(cls))(nativeArray);
+    return new $rt_array(cls, nativeArray);
 }
 function $rt_createCharArray(sz) {
     return $rt_createNumericArray($rt_charcls(), new Uint16Array(sz));
 }
+function $rt_createCharArrayFromData(data) {
+    var buffer = new Uint16Array(data.length);
+    buffer.set(data);
+    return $rt_createNumericArray($rt_charcls(), buffer);
+}
 function $rt_createByteArray(sz) {
     return $rt_createNumericArray($rt_bytecls(), new Int8Array(sz));
+}
+function $rt_createByteArrayFromData(data) {
+    var buffer = new Int8Array(data.length);
+    buffer.set(data);
+    return $rt_createNumericArray($rt_bytecls(), buffer);
 }
 function $rt_createShortArray(sz) {
     return $rt_createNumericArray($rt_shortcls(), new Int16Array(sz));
 }
+function $rt_createShortArrayFromData(data) {
+    var buffer = new Int16Array(data.length);
+    buffer.set(data);
+    return $rt_createNumericArray($rt_shortcls(), buffer);
+}
 function $rt_createIntArray(sz) {
     return $rt_createNumericArray($rt_intcls(), new Int32Array(sz));
+}
+function $rt_createIntArrayFromData(data) {
+    var buffer = new Int32Array(data.length);
+    buffer.set(data);
+    return $rt_createNumericArray($rt_intcls(), buffer);
 }
 function $rt_createBooleanArray(sz) {
     return $rt_createNumericArray($rt_booleancls(), new Int8Array(sz));
 }
+function $rt_createBooleanArrayFromData(data) {
+    var buffer = new Int8Array(data.length);
+    buffer.set(data);
+    return $rt_createNumericArray($rt_booleancls(), buffer);
+}
 function $rt_createFloatArray(sz) {
     return $rt_createNumericArray($rt_floatcls(), new Float32Array(sz));
 }
+function $rt_createFloatArrayFromData(data) {
+    var buffer = new Float32Array(data.length);
+    buffer.set(data);
+    return $rt_createNumericArray($rt_floatcls(), buffer);
+}
 function $rt_createDoubleArray(sz) {
     return $rt_createNumericArray($rt_doublecls(), new Float64Array(sz));
+}
+function $rt_createDoubleArrayFromData(data) {
+    var buffer = new Float64Array(data.length);
+    buffer.set(data);
+    return $rt_createNumericArray($rt_doublecls(), buffer);
 }
 
 function $rt_arraycls(cls) {
     var result = cls.$array;
     if (result === null) {
-        var arraycls = function(data) {
-            this.data = data;
-            this.$id$ = 0;
-        };
-        arraycls.prototype = new ($rt_objcls())();
-        arraycls.prototype.constructor = arraycls;
-        arraycls.prototype.toString = function() {
-            var str = "[";
-            for (var i = 0; i < this.data.length; ++i) {
-                if (i > 0) {
-                    str += ", ";
-                }
-                str += this.data[i].toString();
-            }
-            str += "]";
-            return str;
-        };
-        $rt_setCloneMethod(arraycls.prototype, function () {
-            var dataCopy;
-            if ('slice' in this.data) {
-                dataCopy = this.data.slice();
-            } else {
-                dataCopy = new this.data.constructor(this.data.length);
-                for (var i = 0; i < dataCopy.length; ++i) {
-                    dataCopy[i] = this.data[i];
-                }
-            }
-            return new arraycls(dataCopy);
-        });
+        var arraycls = {};
         var name = "[" + cls.$meta.binaryName;
-        arraycls.$meta = { item : cls, supertypes : [$rt_objcls()], primitive : false, superclass : $rt_objcls(),
-                name : name, binaryName : name, enum : false };
+        arraycls.$meta = {
+            item: cls,
+            supertypes: [$rt_objcls()],
+            primitive: false,
+            superclass: $rt_objcls(),
+            name: name,
+            binaryName: name,
+            enum: false,
+            simpleName: null,
+            declaringClass: null,
+            enclosingClass: null
+        };
         arraycls.classObject = null;
         arraycls.$array = null;
         result = arraycls;
@@ -138,7 +171,7 @@ function $rt_createcls() {
     return {
         $array : null,
         classObject : null,
-        $meta : {
+        $meta: {
             supertypes : [],
             superclass : null
         }
@@ -151,6 +184,9 @@ function $rt_createPrimitiveCls(name, binaryName) {
     cls.$meta.binaryName = binaryName;
     cls.$meta.enum = false;
     cls.$meta.item = null;
+    cls.$meta.simpleName = null;
+    cls.$meta.declaringClass = null;
+    cls.$meta.enclosingClass = null;
     return cls;
 }
 var $rt_booleanclsCache = null;
@@ -470,6 +506,20 @@ function $rt_metadata(data) {
 
         m.accessLevel = data[i++];
 
+        var innerClassInfo = data[i++];
+        if (innerClassInfo === 0) {
+            m.simpleName = null;
+            m.declaringClass = null;
+            m.enclosingClass = null;
+        } else {
+            var enclosingClass = innerClassInfo[0];
+            m.enclosingClass = enclosingClass !== 0 ? enclosingClass : null;
+            var declaringClass = innerClassInfo[1];
+            m.declaringClass = declaringClass !== 0 ? declaringClass : null;
+            var simpleName = innerClassInfo[2];
+            m.simpleName = simpleName !== 0 ? simpleName : null;
+        }
+
         var clinit = data[i++];
         cls.$clinit = clinit !== 0 ? clinit : function() {};
 
@@ -488,6 +538,31 @@ function $rt_metadata(data) {
         }
 
         cls.$array = null;
+    }
+}
+function $rt_wrapFunction0(f) {
+    return function() {
+        return f(this);
+    }
+}
+function $rt_wrapFunction1(f) {
+    return function(p1) {
+        return f(this, p1);
+    }
+}
+function $rt_wrapFunction2(f) {
+    return function(p1, p2) {
+        return f(this, p1, p2);
+    }
+}
+function $rt_wrapFunction3(f) {
+    return function(p1, p2, p3) {
+        return f(this, p1, p2, p3, p3);
+    }
+}
+function $rt_wrapFunction4(f) {
+    return function(p1, p2, p3, p4) {
+        return f(this, p1, p2, p3, p4);
     }
 }
 function $rt_threadStarter(f) {
@@ -593,7 +668,6 @@ function $dbg_class(obj) {
     }
     return clsName;
 }
-
 function Long(lo, hi) {
     this.lo = lo | 0;
     this.hi = hi | 0;
@@ -623,7 +697,7 @@ Long.prototype.valueOf = function() {
 var Long_ZERO = new Long(0, 0);
 var Long_MAX_NORMAL = 1 << 18;
 function Long_fromInt(val) {
-    return val >= 0 ? new Long(val, 0) : new Long(val, -1);
+    return new Long(val, (-(val < 0)) | 0);
 }
 function Long_fromNumber(val) {
     if (val >= 0) {
@@ -633,14 +707,8 @@ function Long_fromNumber(val) {
     }
 }
 function Long_toNumber(val) {
-    var lo = val.lo;
-    var hi = val.hi;
-    if (lo < 0) {
-        lo += 0x100000000;
-    }
-    return 0x100000000 * hi + lo;
+    return 0x100000000 * val.hi + (val.lo >>> 0);
 }
-
 var $rt_imul = Math.imul || function(a, b) {
     var ah = (a >>> 16) & 0xFFFF;
     var al = a & 0xFFFF;
@@ -649,20 +717,37 @@ var $rt_imul = Math.imul || function(a, b) {
     return (al * bl + (((ah * bl + al * bh) << 16) >>> 0)) | 0;
 };
 var $rt_udiv = function(a, b) {
-    if (a < 0) {
-        a += 0x100000000;
-    }
-    if (b < 0) {
-        b += 0x100000000;
-    }
-    return (a / b) | 0;
+    return ((a >>> 0) / (b >>> 0)) >>> 0;
 };
 var $rt_umod = function(a, b) {
-    if (a < 0) {
-        a += 0x100000000;
-    }
-    if (b < 0) {
-        b += 0x100000000;
-    }
-    return (a % b) | 0;
+    return ((a >>> 0) % (b >>> 0)) >>> 0;
 };
+function $rt_checkBounds(index, array) {
+    if (index < 0 || index >= array.length) {
+        $rt_throwAIOOBE();
+    }
+    return index;
+}
+function $rt_checkUpperBound(index, array) {
+    if (index >= array.length) {
+        $rt_throwAIOOBE();
+    }
+    return index;
+}
+function $rt_checkLowerBound(index) {
+    if (index < 0) {
+        $rt_throwAIOOBE();
+    }
+    return index;
+}
+function $rt_classWithoutFields(superclass) {
+    if (superclass === 0) {
+        return function() {};
+    }
+    if (superclass === void 0) {
+        superclass = $rt_objcls();
+    }
+    return function() {
+        superclass.call(this);
+    };
+}

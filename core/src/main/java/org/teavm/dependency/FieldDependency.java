@@ -19,7 +19,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import org.teavm.callgraph.DefaultCallGraphNode;
 import org.teavm.model.CallLocation;
 import org.teavm.model.FieldReader;
 import org.teavm.model.FieldReference;
@@ -27,9 +26,10 @@ import org.teavm.model.FieldReference;
 public class FieldDependency implements FieldDependencyInfo {
     DependencyNode value;
     private FieldReader field;
+    private boolean present;
     private FieldReference reference;
-    private List<LocationListener> locationListeners;
-    private Set<CallLocation> locations;
+    List<LocationListener> locationListeners;
+    Set<CallLocation> locations;
     boolean activated;
 
     FieldDependency(DependencyNode value, FieldReader field, FieldReference reference) {
@@ -54,7 +54,7 @@ public class FieldDependency implements FieldDependencyInfo {
 
     @Override
     public boolean isMissing() {
-        return field == null;
+        return field == null && !present;
     }
 
     public FieldDependency addLocation(CallLocation location) {
@@ -82,6 +82,13 @@ public class FieldDependency implements FieldDependencyInfo {
                     listener.locationAdded(location);
                 }
             }
+        }
+    }
+
+    void cleanup() {
+        if (field != null) {
+            field = null;
+            present = true;
         }
     }
 }

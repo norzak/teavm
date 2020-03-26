@@ -52,7 +52,7 @@ public class NewArrayExpr extends Expr {
         NewArrayExpr copy = new NewArrayExpr();
         cache.put(this, copy);
         copy.setType(type);
-        copy.setLength(length != null ? length.clone() : null);
+        copy.setLength(length != null ? length.clone(cache) : null);
         return copy;
     }
 }

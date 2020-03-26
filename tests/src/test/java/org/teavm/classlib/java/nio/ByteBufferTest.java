@@ -27,8 +27,10 @@ import java.nio.ReadOnlyBufferException;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.teavm.junit.TeaVMTestRunner;
+import org.teavm.junit.WholeClassCompilation;
 
 @RunWith(TeaVMTestRunner.class)
+@WholeClassCompilation
 public class ByteBufferTest {
     @Test
     public void allocatesDirect() {
@@ -335,18 +337,21 @@ public class ByteBufferTest {
         byte[] receiver = new byte[4];
         try {
             buffer.get(receiver, 0, 5);
+            fail("Error expected");
         } catch (IndexOutOfBoundsException e) {
             assertThat(receiver, is(new byte[4]));
             assertThat(buffer.position(), is(0));
         }
         try {
             buffer.get(receiver, -1, 3);
+            fail("Error expected");
         } catch (IndexOutOfBoundsException e) {
             assertThat(receiver, is(new byte[4]));
             assertThat(buffer.position(), is(0));
         }
         try {
             buffer.get(receiver, 6, 3);
+            fail("Error expected");
         } catch (IndexOutOfBoundsException e) {
             assertThat(receiver, is(new byte[4]));
             assertThat(buffer.position(), is(0));

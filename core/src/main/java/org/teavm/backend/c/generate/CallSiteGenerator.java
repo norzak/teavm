@@ -19,50 +19,56 @@ import com.carrotsearch.hppc.ObjectIntHashMap;
 import com.carrotsearch.hppc.ObjectIntMap;
 import java.util.ArrayList;
 import java.util.List;
-import org.teavm.model.FieldReference;
+import java.util.Objects;
 import org.teavm.model.ValueType;
 import org.teavm.model.lowlevel.CallSiteDescriptor;
 import org.teavm.model.lowlevel.CallSiteLocation;
 import org.teavm.model.lowlevel.ExceptionHandlerDescriptor;
 
 public class CallSiteGenerator {
-    private static final String CALL_SITE = "org.teavm.runtime.CallSite";
-    private static final String CALL_SITE_LOCATION = "org.teavm.runtime.CallSiteLocation";
-    private static final String EXCEPTION_HANDLER = "org.teavm.runtime.ExceptionHandler";
-
     private GenerationContext context;
     private CodeWriter writer;
-    private ObjectIntMap<CallSiteLocation> locationMap = new ObjectIntHashMap<>();
-    private List<CallSiteLocation> locations = new ArrayList<>();
-    private List<ExceptionHandlerDescriptor> exceptionHandlers = new ArrayList<>();
-    private String callSiteLocationName;
-    private String exceptionHandlerName;
+    private IncludeManager includes;
+    private ObjectIntMap<LocationList> locationMap = new ObjectIntHashMap<>();
+    private List<LocationList> locations = new ArrayList<>();
+    private List<HandlerContainer> exceptionHandlers = new ArrayList<>();
+    private ObjectIntMap<MethodLocation> methodLocationMap = new ObjectIntHashMap<>();
+    private List<MethodLocation> methodLocations = new ArrayList<>();
+    private String callSitesName;
+    private boolean isStatic;
 
-    public CallSiteGenerator(GenerationContext context, CodeWriter writer) {
+    public CallSiteGenerator(GenerationContext context, CodeWriter writer, IncludeManager includes,
+            String callSitesName) {
         this.context = context;
         this.writer = writer;
-        callSiteLocationName = context.getNames().forClass(CALL_SITE_LOCATION);
-        exceptionHandlerName = context.getNames().forClass(EXCEPTION_HANDLER);
+        this.includes = includes;
+        this.callSitesName = callSitesName;
     }
 
-    public void generate(List<CallSiteDescriptor> callSites) {
+    public void setStatic(boolean isStatic) {
+        this.isStatic = isStatic;
+    }
+
+    public void generate(List<? extends CallSiteDescriptor> callSites) {
+        CodeWriter writerForMethodLocations = writer.fragment();
         CodeWriter writerForLocations = writer.fragment();
         generateCallSites(callSites);
 
         CodeWriter oldWriter = writer;
         writer = writerForLocations;
         generateLocations();
+        writer = writerForMethodLocations;
+        generateMethodLocations();
         generateHandlers();
         writer = oldWriter;
     }
 
-    private void generateCallSites(List<CallSiteDescriptor> callSites) {
-        String callSiteName = context.getNames().forClass(CALL_SITE);
-
-        writer.print("static ").print(callSiteName).print(" callSites[" + callSites.size() + "] = {").indent();
-        String handlerCountName = fieldName(CALL_SITE, "handlerCount");
-        String firstHandlerName = fieldName(CALL_SITE, "firstHandler");
-        String locationName = fieldName(CALL_SITE, "location");
+    private void generateCallSites(List<? extends CallSiteDescriptor> callSites) {
+        includes.includePath("strings.h");
+        if (isStatic) {
+            writer.print("static ");
+        }
+        writer.print("TeaVM_CallSite " + callSitesName + "[" + callSites.size() + "] = {").indent();
 
         boolean first = true;
         for (CallSiteDescriptor callSite : callSites) {
@@ -72,57 +78,105 @@ public class CallSiteGenerator {
             first = false;
 
             int locationIndex = -1;
-            if (callSite.getLocation() != null) {
-                locationIndex = locationMap.getOrDefault(callSite.getLocation(), -1);
-                if (locationIndex < 0) {
-                    locationIndex = locations.size();
-                    locationMap.put(callSite.getLocation(), locationIndex);
-                    locations.add(callSite.getLocation());
+            if (!context.isObfuscated()) {
+                CallSiteLocation[] locations = callSite.getLocations();
+                if (locations != null && locations.length > 0) {
+                    LocationList prevList = null;
+                    for (int i = locations.length - 1; i >= 0; --i) {
+                        LocationList list = new LocationList(locations[i], prevList);
+                        locationIndex = locationMap.getOrDefault(list, -1);
+                        if (locationIndex < 0) {
+                            locationIndex = this.locations.size();
+                            locationMap.put(list, locationIndex);
+                            this.locations.add(list);
+                        } else {
+                            list = this.locations.get(locationIndex);
+                        }
+                        prevList = list;
+                    }
                 }
             }
 
             String firstHandlerExpr = !callSite.getHandlers().isEmpty()
-                    ? "exceptionHandlers + " + exceptionHandlers.size()
+                    ? "exceptionHandlers_" + callSitesName + " + " + exceptionHandlers.size()
                     : "NULL";
             writer.println().print("{ ");
-            writer.print(".").print(handlerCountName).print(" = ")
-                    .print(String.valueOf(callSite.getHandlers().size())).print(", ");
-            writer.print(".").print(firstHandlerName).print(" = ").print(firstHandlerExpr).print(", ");
-            writer.print(".").print(locationName).print(" = ")
-                    .print(locationIndex >= 0 ? "callSiteLocations + " + locationIndex : "NULL");
+            writer.print(".firstHandler = ").print(firstHandlerExpr).print(", ");
+            writer.print(".location = ")
+                    .print(locationIndex >= 0 ? "callSiteLocations_" + callSitesName + " + " + locationIndex : "NULL");
             writer.print(" }");
 
-            exceptionHandlers.addAll(callSite.getHandlers());
+            for (int i = 0; i < callSite.getHandlers().size(); ++i) {
+                if (i > 0) {
+                    exceptionHandlers.get(exceptionHandlers.size() - 1).nextIndex = exceptionHandlers.size();
+                }
+                exceptionHandlers.add(new HandlerContainer(callSite.getHandlers().get(i)));
+            }
         }
 
         writer.println().outdent().println("};");
     }
 
     private void generateLocations() {
-        writer.print("static ").print(callSiteLocationName).print(" callSiteLocations[" + locations.size() + "] = {")
-                .indent();
-
-        String fileNameName = fieldName(CALL_SITE_LOCATION, "fileName");
-        String classNameName = fieldName(CALL_SITE_LOCATION, "className");
-        String methodNameName = fieldName(CALL_SITE_LOCATION, "methodName");
-        String lineNumberName = fieldName(CALL_SITE_LOCATION, "lineNumber");
+        if (locations.isEmpty()) {
+            return;
+        }
+        writer.print("static TeaVM_CallSiteLocation callSiteLocations_" + callSitesName
+                + "[" + locations.size() + "] = {").indent();
 
         boolean first = true;
-        for (CallSiteLocation location : locations) {
+        for (LocationList locationList : locations) {
+            if (!first) {
+                writer.print(",");
+            }
+            first = false;
+
+            CallSiteLocation location = locationList.location;
+
+            writer.println().print("{ ");
+            MethodLocation methodLocation = new MethodLocation(location.getFileName(), location.getClassName(),
+                    location.getMethodName());
+            int index = methodLocationMap.getOrDefault(methodLocation, -1);
+            if (index < 0) {
+                index = methodLocations.size();
+                methodLocationMap.put(methodLocation, index);
+                methodLocations.add(methodLocation);
+            }
+            writer.print(".method = ").print("methodLocations_" + callSitesName + " + " + index)
+                    .print(", ");
+            writer.print(".lineNumber = ").print(String.valueOf(location.getLineNumber()));
+
+            if (locationList.next != null) {
+                int nextIndex = locationMap.get(locationList.next);
+                writer.print(", .next = callSiteLocations_" + callSitesName + " + " + nextIndex);
+            }
+
+            writer.print(" }");
+        }
+
+        writer.println().outdent().println("};");
+    }
+
+    private void generateMethodLocations() {
+        if (methodLocations.isEmpty()) {
+            return;
+        }
+
+        writer.print("static TeaVM_MethodLocation methodLocations_" + callSitesName
+                + "[" + methodLocations.size() + "] = {").indent();
+
+        boolean first = true;
+        for (MethodLocation location : methodLocations) {
             if (!first) {
                 writer.print(",");
             }
             first = false;
 
             writer.println().print("{ ");
-            writer.print(".").print(fileNameName).print(" = ")
-                    .print(getStringExpr(location.getFileName())).print(", ");
-            writer.print(".").print(classNameName).print(" = ")
-                    .print(getStringExpr(location.getClassName())).print(", ");
-            writer.print(".").print(methodNameName).print(" = ")
-                    .print(getStringExpr(location.getMethodName())).print(", ");
-            writer.print(".").print(lineNumberName).print(" = ")
-                    .print(String.valueOf(location.getLineNumber()));
+            String fileName = location.file != null && !location.file.isEmpty() ? location.file : null;
+            writer.print(".fileName = ").print(getStringExpr(fileName)).print(", ");
+            writer.print(".className = ").print(getStringExpr(location.className)).print(", ");
+            writer.print(".methodName = ").print(getStringExpr(location.methodName));
 
             writer.print(" }");
         }
@@ -131,14 +185,15 @@ public class CallSiteGenerator {
     }
 
     private void generateHandlers() {
-        writer.print("static ").print(exceptionHandlerName).print(" exceptionHandlers[" + exceptionHandlers.size()
-                + "] = {").indent();
-
-        String idName = fieldName(EXCEPTION_HANDLER, "id");
-        String exceptionClassName = fieldName(EXCEPTION_HANDLER, "exceptionClass");
+        if (exceptionHandlers.isEmpty()) {
+            return;
+        }
+        String name = "exceptionHandlers_" + callSitesName;
+        writer.print("static TeaVM_ExceptionHandler " + name + "["
+                + exceptionHandlers.size() + "] = {").indent();
 
         boolean first = true;
-        for (ExceptionHandlerDescriptor handler : exceptionHandlers) {
+        for (HandlerContainer handler : exceptionHandlers) {
             if (!first) {
                 writer.print(",");
             }
@@ -146,11 +201,16 @@ public class CallSiteGenerator {
 
             writer.println().print("{ ");
 
-            String classExpr = handler.getClassName() != null
-                    ? "&" + context.getNames().forClassInstance(ValueType.object(handler.getClassName()))
+            if (handler.descriptor.getClassName() != null) {
+                includes.includeClass(handler.descriptor.getClassName());
+            }
+            String classExpr = handler.descriptor.getClassName() != null
+                    ? "(TeaVM_Class*) &"
+                        + context.getNames().forClassInstance(ValueType.object(handler.descriptor.getClassName()))
                     : "NULL";
-            writer.print(".").print(idName).print(" = ").print(String.valueOf(handler.getId())).print(",");
-            writer.print(".").print(exceptionClassName).print(" = ").print(classExpr);
+            writer.print(".id = ").print(String.valueOf(handler.descriptor.getId())).print(", ");
+            writer.print(".exceptionClass = ").print(classExpr).print(", ");
+            writer.print(".next = ").print(handler.nextIndex < 0 ? "NULL" : name + "+" + handler.nextIndex);
 
             writer.print(" }");
         }
@@ -158,11 +218,74 @@ public class CallSiteGenerator {
         writer.println().outdent().println("};");
     }
 
-    private String fieldName(String className, String fieldName) {
-        return context.getNames().forMemberField(new FieldReference(className, fieldName));
+    private String getStringExpr(String s) {
+        return s != null ? "&TEAVM_GET_STRING(" + context.getStringPool().getStringIndex(s) + ")" : "NULL";
     }
 
-    private String getStringExpr(String s) {
-        return s != null ? "stringPool + " + context.getStringPool().getStringIndex(s) : "NULL";
+    static class HandlerContainer {
+        ExceptionHandlerDescriptor descriptor;
+        int nextIndex = -1;
+
+        HandlerContainer(ExceptionHandlerDescriptor descriptor) {
+            this.descriptor = descriptor;
+        }
+    }
+
+    final static class MethodLocation {
+        final String file;
+        final String className;
+        final String methodName;
+
+        MethodLocation(String file, String className, String methodName) {
+            this.file = file;
+            this.className = className;
+            this.methodName = methodName;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof MethodLocation)) {
+                return false;
+            }
+            MethodLocation that = (MethodLocation) o;
+            return Objects.equals(file, that.file)
+                    && Objects.equals(className, that.className)
+                    && Objects.equals(methodName, that.methodName);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(file, className, methodName);
+        }
+    }
+
+    final static class LocationList {
+        final CallSiteLocation location;
+        final LocationList next;
+
+        LocationList(CallSiteLocation location, LocationList next) {
+            this.location = location;
+            this.next = next;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof LocationList)) {
+                return false;
+            }
+            LocationList that = (LocationList) o;
+            return location.equals(that.location) && Objects.equals(next, that.next);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(location, next);
+        }
     }
 }

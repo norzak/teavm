@@ -31,13 +31,11 @@ public class SourceWriter implements Appendable, LocationProvider {
     private int column;
     private int line;
     private int offset;
-    private boolean classScoped;
 
-    SourceWriter(NamingStrategy naming, Appendable innerWriter, int lineWidth, boolean classScoped) {
+    SourceWriter(NamingStrategy naming, Appendable innerWriter, int lineWidth) {
         this.naming = naming;
         this.innerWriter = innerWriter;
         this.lineWidth = lineWidth;
-        this.classScoped = classScoped;
     }
 
     void setMinified(boolean minified) {
@@ -47,10 +45,6 @@ public class SourceWriter implements Appendable, LocationProvider {
     public SourceWriter append(String value) throws IOException {
         append((CharSequence) value);
         return this;
-    }
-
-    public SourceWriter append(Object value) throws IOException {
-        return append(String.valueOf(value));
     }
 
     public SourceWriter append(int value) throws IOException {
@@ -101,11 +95,11 @@ public class SourceWriter implements Appendable, LocationProvider {
     }
 
     public SourceWriter appendClass(String cls) throws IOException {
-        return append(naming.getNameFor(cls));
+        return appendName(naming.getNameFor(cls));
     }
 
     public SourceWriter appendClass(Class<?> cls) throws IOException {
-        return append(naming.getNameFor(cls.getName()));
+        return appendClass(cls.getName());
     }
 
     public SourceWriter appendField(FieldReference field) throws IOException {
@@ -113,8 +107,7 @@ public class SourceWriter implements Appendable, LocationProvider {
     }
 
     public SourceWriter appendStaticField(FieldReference field) throws IOException {
-        appendClassScopeIfNecessary(field.getClassName());
-        return append(naming.getFullNameFor(field));
+        return appendName(naming.getFullNameFor(field));
     }
 
     public SourceWriter appendMethod(MethodDescriptor method) throws IOException {
@@ -126,8 +119,7 @@ public class SourceWriter implements Appendable, LocationProvider {
     }
 
     public SourceWriter appendMethodBody(MethodReference method) throws IOException {
-        appendClassScopeIfNecessary(method.getClassName());
-        return append(naming.getFullNameFor(method));
+        return appendName(naming.getFullNameFor(method));
     }
 
     public SourceWriter appendMethodBody(String className, String name, ValueType... params) throws IOException {
@@ -143,19 +135,19 @@ public class SourceWriter implements Appendable, LocationProvider {
     }
 
     public SourceWriter appendInit(MethodReference method) throws IOException {
-        appendClassScopeIfNecessary(method.getClassName());
-        return append(naming.getNameForInit(method));
+        return appendName(naming.getNameForInit(method));
     }
 
     public SourceWriter appendClassInit(String className) throws IOException {
-        appendClassScopeIfNecessary(className);
-        return append(naming.getNameForClassInit(className));
+        return appendName(naming.getNameForClassInit(className));
     }
 
-    private void appendClassScopeIfNecessary(String className) throws IOException {
-        if (classScoped) {
-            append(naming.getNameFor(className)).append(".");
+    private SourceWriter appendName(ScopedName name) throws IOException {
+        if (name.scoped) {
+            append(naming.getScopeName()).append(".");
         }
+        append(name.value);
+        return this;
     }
 
     private void appendIndent() throws IOException {

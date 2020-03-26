@@ -35,6 +35,8 @@ abstract class AbstractInstructionAnalyzer extends AbstractInstructionReader {
     static final MethodReference CLONE_METHOD = new MethodReference(Object.class, "clone", Object.class);
     private static final MethodReference NPE_INIT_METHOD = new MethodReference(NullPointerException.class,
             "<init>", void.class);
+    private static final MethodReference AIOOB_INIT_METHOD = new MethodReference(ArrayIndexOutOfBoundsException.class,
+            "<init>", void.class);
     static final MethodReference MONITOR_ENTER_METHOD = new MethodReference(Object.class,
             "monitorEnter", Object.class, void.class);
     static final MethodReference MONITOR_ENTER_SYNC_METHOD = new MethodReference(Object.class,
@@ -160,7 +162,7 @@ abstract class AbstractInstructionAnalyzer extends AbstractInstructionReader {
                 fieldDep.getValue().connect(receiverNode);
             }
         }
-        initClass(field.getClassName());
+        touchField(instance, fieldDep, field);
     }
 
     @Override
@@ -174,7 +176,17 @@ abstract class AbstractInstructionAnalyzer extends AbstractInstructionReader {
                 valueNode.connect(fieldDep.getValue());
             }
         }
-        initClass(field.getClassName());
+        touchField(instance, fieldDep, field);
+    }
+
+    private void touchField(VariableReader instance, FieldDependency fieldDep, FieldReference field) {
+        if (instance == null) {
+            if (fieldDep.getField() != null) {
+                initClass(fieldDep.getField().getOwnerName());
+            }
+        } else {
+            getAnalyzer().linkClass(field.getClassName());
+        }
     }
 
     @Override
@@ -259,6 +271,14 @@ abstract class AbstractInstructionAnalyzer extends AbstractInstructionReader {
         MethodDependency methodDep = getAnalyzer().linkMethod(MONITOR_EXIT_SYNC_METHOD);
         methodDep.addLocation(getCallLocation());
         getNode(objectRef).connect(methodDep.getVariable(1));
+        methodDep.use();
+    }
+
+    @Override
+    public void boundCheck(VariableReader receiver, VariableReader index, VariableReader array, boolean lower) {
+        MethodDependency methodDep = getAnalyzer().linkMethod(AIOOB_INIT_METHOD);
+        methodDep.addLocation(getCallLocation());
+        methodDep.getVariable(0).propagate(getAnalyzer().getType(ArrayIndexOutOfBoundsException.class.getName()));
         methodDep.use();
     }
 

@@ -25,6 +25,7 @@ import org.teavm.backend.javascript.spi.InjectorContext;
 import org.teavm.dependency.DependencyAgent;
 import org.teavm.dependency.DependencyPlugin;
 import org.teavm.dependency.MethodDependency;
+import org.teavm.dependency.MethodDependencyInfo;
 import org.teavm.model.ClassReader;
 import org.teavm.model.MethodDescriptor;
 import org.teavm.model.MethodReader;
@@ -57,6 +58,14 @@ public class PlatformGenerator implements Generator, Injector, DependencyPlugin 
                 break;
             case "getEnumConstants":
                 method.getResult().propagate(agent.getType("[Ljava/lang/Enum;"));
+                break;
+            case "getName":
+            case "getSimpleName":
+                method.getResult().propagate(agent.getType("java.lang.String"));
+                break;
+            case "getEnclosingClass":
+            case "getDeclaringClass":
+                method.getResult().propagate(agent.getType("java.lang.Class"));
                 break;
         }
     }
@@ -108,15 +117,21 @@ public class PlatformGenerator implements Generator, Injector, DependencyPlugin 
         }
     }
 
-    private void generatePrepareNewInstance(GeneratorContext context, SourceWriter writer)
-            throws IOException {
+    private void generatePrepareNewInstance(GeneratorContext context, SourceWriter writer) throws IOException {
+        MethodDependencyInfo newInstanceMethod = context.getDependency().getMethod(
+                new MethodReference(Platform.class, "newInstanceImpl", PlatformClass.class, Object.class));
         writer.append("var c").ws().append("=").ws().append("'$$constructor$$';").softNewLine();
-        for (String clsName : context.getClassSource().getClassNames()) {
-            ClassReader cls = context.getClassSource().get(clsName);
-            MethodReader method = cls.getMethod(new MethodDescriptor("<init>", void.class));
-            if (method != null) {
-                writer.appendClass(clsName).append("[c]").ws().append("=").ws()
-                        .appendMethodBody(method.getReference()).append(";").softNewLine();
+        if (newInstanceMethod != null) {
+            for (String clsName : newInstanceMethod.getResult().getTypes()) {
+                ClassReader cls = context.getClassSource().get(clsName);
+                if (cls == null) {
+                    continue;
+                }
+                MethodReader method = cls.getMethod(new MethodDescriptor("<init>", void.class));
+                if (method != null) {
+                    writer.appendClass(clsName).append("[c]").ws().append("=").ws()
+                            .appendMethodBody(method.getReference()).append(";").softNewLine();
+                }
             }
         }
     }

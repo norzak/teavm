@@ -40,14 +40,15 @@ class FastInstructionAnalyzer extends AbstractInstructionAnalyzer {
         }
         MethodDependency methodDep = dependencyAnalyzer.linkMethod(method);
         methodDep.addLocation(callLocation);
-        methodDep.use();
+        methodDep.use(false);
     }
 
     @Override
     protected void invokeVirtual(VariableReader receiver, VariableReader instance, MethodReference method,
             List<? extends VariableReader> arguments) {
         invokeGetClass(method);
-        dependencyAnalyzer.getVirtualCallConsumer(method).addLocation(impreciseLocation);
+        FastVirtualCallConsumer consumer = dependencyAnalyzer.getVirtualCallConsumer(method);
+        consumer.addLocation(impreciseLocation);
     }
 
     private void invokeGetClass(MethodReference method) {

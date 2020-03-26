@@ -31,6 +31,7 @@ import org.teavm.model.FieldReference;
 import org.teavm.model.MethodReader;
 import org.teavm.model.MethodReference;
 import org.teavm.model.ProgramReader;
+import org.teavm.model.ReferenceCache;
 import org.teavm.model.TryCatchBlockReader;
 import org.teavm.model.ValueType;
 
@@ -41,8 +42,8 @@ public class FastDependencyAnalyzer extends DependencyAnalyzer {
     private Map<String, DependencyNode> subtypeNodes = new HashMap<>();
 
     public FastDependencyAnalyzer(ClassReaderSource classSource, ClassLoader classLoader,
-            ServiceRepository services, Diagnostics diagnostics) {
-        super(classSource, classLoader, services, diagnostics);
+            ServiceRepository services, Diagnostics diagnostics, ReferenceCache referenceCache) {
+        super(classSource, classLoader, services, diagnostics, referenceCache);
 
         instancesNode = new DependencyNode(this, null);
         classesNode = new DependencyNode(this, null);
@@ -77,11 +78,11 @@ public class FastDependencyAnalyzer extends DependencyAnalyzer {
         }
 
         if (method.hasModifier(ElementModifier.SYNCHRONIZED)) {
-            processAsyncMethod(methodDep);
+            processAsyncMethod();
         }
     }
 
-    private void processAsyncMethod(MethodDependency methodDep) {
+    private void processAsyncMethod() {
         if (asyncSupported) {
             linkMethod(MONITOR_ENTER_METHOD).use();
         }
@@ -143,7 +144,7 @@ public class FastDependencyAnalyzer extends DependencyAnalyzer {
                     if (fullType instanceof ValueType.Object) {
                         String prefix = key.substring(0, degree) + "L";
                         String className = ((ValueType.Object) fullType).getClassName();
-                        ClassReader cls = getClassSource().get(key);
+                        ClassReader cls = getClassSource().get(className);
                         if (cls != null) {
                             if (cls.getParent() != null) {
                                 node.connect(getSubtypeNode(prefix + cls.getParent().replace('.', '/') + ";"));
@@ -176,7 +177,7 @@ public class FastDependencyAnalyzer extends DependencyAnalyzer {
 
     FastVirtualCallConsumer getVirtualCallConsumer(MethodReference method) {
         return virtualCallConsumers.computeIfAbsent(method, key -> {
-            FastVirtualCallConsumer consumer = new FastVirtualCallConsumer(instancesNode, key.getDescriptor(), this);
+            FastVirtualCallConsumer consumer = new FastVirtualCallConsumer(instancesNode, key, this);
             defer(() -> {
                 getSubtypeNode(method.getClassName()).addConsumer(consumer);
             });
@@ -187,5 +188,12 @@ public class FastDependencyAnalyzer extends DependencyAnalyzer {
     @Override
     boolean domainOptimizationEnabled() {
         return false;
+    }
+
+    @Override
+    public void cleanup(ClassSourcePacker classSourcePacker) {
+        virtualCallConsumers.clear();
+        subtypeNodes.clear();
+        super.cleanup(classSourcePacker);
     }
 }

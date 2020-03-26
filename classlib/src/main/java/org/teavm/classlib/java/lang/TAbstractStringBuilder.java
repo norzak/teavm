@@ -56,16 +56,16 @@ class TAbstractStringBuilder extends TObject implements TSerializable, TCharSequ
         length = value.length();
     }
 
-    protected TAbstractStringBuilder append(TString string) {
+    protected TAbstractStringBuilder append(String string) {
         return insert(length, string);
     }
 
-    protected TAbstractStringBuilder insert(int index, TString string) {
+    protected TAbstractStringBuilder insert(int index, String string) {
         if (index < 0 || index > length) {
             throw new TStringIndexOutOfBoundsException();
         }
         if (string == null) {
-            string = TString.wrap("null");
+            string = "null";
         } else if (string.isEmpty()) {
             return this;
         }
@@ -229,7 +229,6 @@ class TAbstractStringBuilder extends TObject implements TSerializable, TCharSequ
         int intPart = 1;
         int sz = 1; // Decimal point always included
         if (negative) {
-            negative = true;
             ++sz; // including '-' sign of mantissa
         }
 
@@ -246,7 +245,7 @@ class TAbstractStringBuilder extends TObject implements TSerializable, TCharSequ
                 intPart = exp + 1;
                 digits = Math.max(digits, intPart + 1);
                 exp = 0;
-            } else if (exp < 0) {
+            } else {
                 mantissa /= Constants.intPowersOfTen[-exp];
                 digits -= exp;
                 exp = 0;
@@ -373,7 +372,7 @@ class TAbstractStringBuilder extends TObject implements TSerializable, TCharSequ
                 intPart = exp + 1;
                 digits = Math.max(digits, intPart + 1);
                 exp = 0;
-            } else if (exp < 0) {
+            } else {
                 mantissa /= Constants.longPowersOfTen[-exp];
                 digits -= exp;
                 exp = 0;
@@ -502,7 +501,7 @@ class TAbstractStringBuilder extends TObject implements TSerializable, TCharSequ
     }
 
     protected TAbstractStringBuilder insert(int index, TObject obj) {
-        return insert(index, TString.wrap(obj != null ? obj.toString() : "null"));
+        return insert(index, obj != null ? obj.toString() : "null");
     }
 
     protected TAbstractStringBuilder append(boolean b) {
@@ -510,7 +509,7 @@ class TAbstractStringBuilder extends TObject implements TSerializable, TCharSequ
     }
 
     protected TAbstractStringBuilder insert(int index, boolean b) {
-        return insert(index, b ? TString.wrap("true") : TString.wrap("false"));
+        return insert(index, b ? "true" : "false");
     }
 
     public void ensureCapacity(int capacity) {
@@ -606,7 +605,7 @@ class TAbstractStringBuilder extends TObject implements TSerializable, TCharSequ
 
     public void getChars(int srcBegin, int srcEnd, char[] dst, int dstBegin) {
         if (srcBegin > srcEnd) {
-            throw new TIndexOutOfBoundsException(TString.wrap("Index out of bounds"));
+            throw new IndexOutOfBoundsException("Index out of bounds");
         }
         while (srcBegin < srcEnd) {
             dst[dstBegin++] = buffer[srcBegin++];
