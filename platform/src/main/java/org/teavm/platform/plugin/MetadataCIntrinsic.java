@@ -23,6 +23,7 @@ import java.util.Set;
 import org.teavm.backend.c.generate.FileGenerator;
 import org.teavm.backend.c.generators.Generator;
 import org.teavm.backend.c.generators.GeneratorContext;
+import org.teavm.common.HashUtils;
 import org.teavm.common.ServiceRepository;
 import org.teavm.model.ClassReaderSource;
 import org.teavm.model.MethodReference;
@@ -65,7 +66,7 @@ class MetadataCIntrinsic implements Generator {
         } else if (value instanceof String) {
             int stringIndex = context.stringPool().getStringIndex((String) value);
             context.includes().includePath("strings.h");
-            context.writerBefore().print("(TeaVM_Object**) &TEAVM_GET_STRING(" + stringIndex + ")");
+            context.writerBefore().print("(TeaVM_Object**) TEAVM_GET_STRING_ADDRESS(" + stringIndex + ")");
         } else if (value instanceof Boolean) {
             context.writerBefore().print((Boolean) value ? "1" : "0");
         } else if (value instanceof Integer) {
@@ -191,37 +192,7 @@ class MetadataCIntrinsic implements Generator {
     }
 
     private void writeResourceMap(GeneratorContext context, ResourceMap<?> resourceMap) {
-        String[] keys = resourceMap.keys();
-        int tableSize = keys.length * 2;
-        int maxTableSize = Math.min(keys.length * 5 / 2, tableSize + 10);
-
-        String[] bestTable = null;
-        int bestCollisionRatio = 0;
-        while (tableSize <= maxTableSize) {
-            String[] table = new String[tableSize];
-            int maxCollisionRatio = 0;
-            for (String key : keys) {
-                int hashCode = key.hashCode();
-                int collisionRatio = 0;
-                while (true) {
-                    int index = mod(hashCode++, table.length);
-                    if (table[index] == null) {
-                        table[index] = key;
-                        break;
-                    }
-                    collisionRatio++;
-                }
-                maxCollisionRatio = Math.max(maxCollisionRatio, collisionRatio);
-            }
-
-            if (bestTable == null || bestCollisionRatio > maxCollisionRatio) {
-                bestCollisionRatio = maxCollisionRatio;
-                bestTable = table;
-            }
-
-            tableSize++;
-        }
-
+        String[] bestTable = HashUtils.createHashTable(resourceMap.keys());
         context.includes().includePath("resource.h");
         context.writerBefore().println("&(struct { int32_t size; TeaVM_ResourceMapEntry entries["
                 + bestTable.length + "]; }) {").indent();
@@ -238,7 +209,7 @@ class MetadataCIntrinsic implements Generator {
             if (key == null) {
                 context.writerBefore().print("{ NULL, NULL }");
             } else {
-                context.writerBefore().print("{ &TEAVM_GET_STRING("
+                context.writerBefore().print("{ TEAVM_GET_STRING_ADDRESS("
                         + context.stringPool().getStringIndex(key) + "), ");
                 writeValue(context, resourceMap.get(key));
                 context.writerBefore().print("}");
@@ -247,14 +218,6 @@ class MetadataCIntrinsic implements Generator {
 
         context.writerBefore().println().outdent().println("}");
         context.writerBefore().outdent().print("}");
-    }
-
-    private static int mod(int a, int b) {
-        a %= b;
-        if (a < 0) {
-            a += b;
-        }
-        return a;
     }
 
     class MethodGenerator {

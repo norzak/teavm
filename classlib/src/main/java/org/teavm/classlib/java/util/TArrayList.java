@@ -16,6 +16,7 @@
 package org.teavm.classlib.java.util;
 
 import java.util.Arrays;
+import java.util.function.Consumer;
 import org.teavm.classlib.java.io.TSerializable;
 import org.teavm.classlib.java.lang.*;
 import org.teavm.classlib.java.util.function.TUnaryOperator;
@@ -186,5 +187,27 @@ public class TArrayList<E> extends TAbstractList<E> implements TCloneable, TSeri
         for (int i = 0; i < size; ++i) {
             array[i] = operator.apply(array[i]);
         }
+    }
+
+    @Override
+    public void forEach(Consumer<? super E> action) {
+        for (int i = 0; i < size; i++) {
+            action.accept(array[i]);
+        }
+    }
+
+    @Override
+    public String toString() {
+        if (size == 0) {
+            return "[]";
+        }
+        int length = size - 1;
+        StringBuilder buffer = new StringBuilder(size * 16);
+        buffer.append('[');
+        for (int i = 0; i < length; i++) {
+            buffer.append(array[i] == this ? "(this Collection)" : array[i]).append(", ");
+        }
+        buffer.append(array[length] == this ? "(this Collection)" : array[length]);
+        return buffer.append(']').toString();
     }
 }

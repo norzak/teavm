@@ -284,6 +284,11 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
                     NullPointerException.class, "<init>", void.class));
             exceptionCons.getVariable(0).propagate(dependencyAnalyzer.getType(NullPointerException.class.getName()));
             exceptionCons.use();
+
+            exceptionCons = dependencyAnalyzer.linkMethod(new MethodReference(
+                    ClassCastException.class, "<init>", void.class));
+            exceptionCons.getVariable(0).propagate(dependencyAnalyzer.getType(ClassCastException.class.getName()));
+            exceptionCons.use();
         }
 
         if (stackTraceIncluded) {
@@ -370,7 +375,7 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
                 controller.getUnprocessedClassSource(), classes,
                 controller.getClassLoader(), controller.getServices(), controller.getProperties(), naming,
                 controller.getDependencyInfo(), m -> isVirtual(virtualMethodContributorContext, m),
-                controller.getClassInitializerInfo());
+                controller.getClassInitializerInfo(), strict);
         renderingContext.setMinifying(obfuscated);
         Renderer renderer = new Renderer(sourceWriter, asyncMethods, asyncFamilyMethods,
                 controller.getDiagnostics(), renderingContext);
@@ -427,10 +432,12 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
 
             for (Map.Entry<? extends String, ? extends TeaVMEntryPoint> entry
                     : controller.getEntryPoints().entrySet()) {
-                sourceWriter.append("").append(entry.getKey()).ws().append("=").ws();
+                sourceWriter.append(entry.getKey()).ws().append("=").ws();
                 MethodReference ref = entry.getValue().getMethod();
                 sourceWriter.append("$rt_mainStarter(").appendMethodBody(ref);
                 sourceWriter.append(");").newLine();
+                sourceWriter.append(entry.getKey()).append(".").append("javaException").ws().append("=").ws()
+                        .append("$rt_javaException;").newLine();
             }
 
             for (RendererListener listener : rendererListeners) {
@@ -487,7 +494,8 @@ public class JavaScriptTarget implements TeaVMTarget, TeaVMJavaScriptHost {
     }
 
     private List<PreparedClass> modelToAst(ListableClassHolderSource classes) {
-        AsyncMethodFinder asyncFinder = new AsyncMethodFinder(controller.getDependencyInfo().getCallGraph());
+        AsyncMethodFinder asyncFinder = new AsyncMethodFinder(controller.getDependencyInfo().getCallGraph(),
+                controller.getDependencyInfo());
         asyncFinder.find(classes);
         asyncMethods.addAll(asyncFinder.getAsyncMethods());
         asyncFamilyMethods.addAll(asyncFinder.getAsyncFamilyMethods());

@@ -24,7 +24,7 @@
     <groupId>org.teavm</groupId>
     <artifactId>teavm</artifactId>
     <version>0.7.0-SNAPSHOT</version>
-    <relativePath>../..</relativePath>
+    <relativePath>../../pom.xml</relativePath>
   </parent>
   <artifactId>teavm-metaprogramming-api</artifactId>
 
@@ -47,6 +47,17 @@
         <configuration>
           <configLocation>../../checkstyle.xml</configLocation>
           <propertyExpansion>config_loc=${basedir}/../..</propertyExpansion>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <configuration>
+          <archive>
+            <manifestEntries>
+              <Automatic-Module-Name>org.teavm.metaprogramming.api</Automatic-Module-Name>
+            </manifestEntries>
+          </archive>
         </configuration>
       </plugin>
       <plugin>

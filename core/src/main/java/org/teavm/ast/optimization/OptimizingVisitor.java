@@ -697,7 +697,9 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
             return false;
         }
         optimization.unwrappedArrayVariable = ((VariableExpr) assign.getLeftValue()).getIndex();
-        if (writeFrequencies[optimization.unwrappedArrayVariable] != 1) {
+        if (writeFrequencies[optimization.unwrappedArrayVariable] != 1
+                || preservedVars[optimization.unwrappedArrayVariable]
+                || readFrequencies[optimization.unwrappedArrayVariable] != optimization.arraySize) {
             return false;
         }
 
@@ -759,6 +761,13 @@ class OptimizingVisitor implements StatementVisitor, ExprVisitor {
         }
         Object constantValue = ((ConstantExpr) subscript.getIndex()).getValue();
         if (!Integer.valueOf(optimization.arrayElementIndex).equals(constantValue)) {
+            return false;
+        }
+
+        VariableAccessFinder isVariableAccessed = new VariableAccessFinder(v -> v == optimization.arrayVariable
+                || v == optimization.unwrappedArrayVariable);
+        assign.getRightValue().acceptVisitor(isVariableAccessed);
+        if (isVariableAccessed.isFound()) {
             return false;
         }
 

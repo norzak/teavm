@@ -29,6 +29,7 @@ import org.teavm.classlib.impl.currency.CurrencyHelper;
 import org.teavm.classlib.impl.lambda.LambdaMetafactorySubstitutor;
 import org.teavm.classlib.impl.tz.DateTimeZoneProvider;
 import org.teavm.classlib.impl.tz.DateTimeZoneProviderIntrinsic;
+import org.teavm.classlib.impl.tz.DateTimeZoneProviderPatch;
 import org.teavm.classlib.impl.tz.TimeZoneGenerator;
 import org.teavm.classlib.impl.unicode.AvailableLocalesMetadataGenerator;
 import org.teavm.classlib.impl.unicode.CLDRHelper;
@@ -66,14 +67,21 @@ public class JCLPlugin implements TeaVMPlugin {
         host.add(new ObfuscationHacks());
 
         if (!isBootstrap()) {
-            ServiceLoaderSupport serviceLoaderSupp = new ServiceLoaderSupport(host.getClassLoader());
-            host.add(serviceLoaderSupp);
+            ServiceLoaderSupport serviceLoaderSupport = new ServiceLoaderSupport(host.getClassLoader());
+            host.add(serviceLoaderSupport);
+            host.registerService(ServiceLoaderInformation.class, serviceLoaderSupport);
             MethodReference loadServicesMethod = new MethodReference(ServiceLoader.class, "loadServices",
                     PlatformClass.class, Object[].class);
+
             TeaVMJavaScriptHost jsExtension = host.getExtension(TeaVMJavaScriptHost.class);
             if (jsExtension != null) {
-                jsExtension.add(loadServicesMethod, serviceLoaderSupp);
+                jsExtension.add(loadServicesMethod, new ServiceLoaderJSSupport());
                 jsExtension.addVirtualMethods(new AnnotationVirtualMethods());
+            }
+
+            TeaVMCHost cHost = host.getExtension(TeaVMCHost.class);
+            if (cHost != null) {
+                cHost.addGenerator(new ServiceLoaderCSupport());
             }
         }
 
@@ -147,6 +155,15 @@ public class JCLPlugin implements TeaVMPlugin {
 
         installMetadata(host.getService(MetadataRegistration.class));
         host.add(new DeclaringClassDependencyListener());
+        applyTimeZoneDetection(host);
+    }
+
+    private void applyTimeZoneDetection(TeaVMHost host) {
+        boolean autodetect = Boolean.parseBoolean(
+                host.getProperties().getProperty("java.util.TimeZone.autodetect", "false"));
+        if (!autodetect) {
+            host.add(new DateTimeZoneProviderPatch());
+        }
     }
 
     private void installMetadata(MetadataRegistration reg) {
@@ -209,6 +226,8 @@ public class JCLPlugin implements TeaVMPlugin {
         reg.register(new MethodReference(Character.class, "obtainDigitMapping", StringResource.class),
                 new CharacterMetadataGenerator());
         reg.register(new MethodReference(Character.class, "obtainClasses", StringResource.class),
+                new CharacterMetadataGenerator());
+        reg.register(new MethodReference(Character.class, "acquireTitleCaseMapping", StringResource.class),
                 new CharacterMetadataGenerator());
     }
 

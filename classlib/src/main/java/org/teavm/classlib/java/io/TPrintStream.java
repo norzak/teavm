@@ -48,7 +48,7 @@ public class TPrintStream extends TFilterOutputStream {
     public TPrintStream(TOutputStream out, boolean autoFlush) {
         super(out);
         this.autoFlush = autoFlush;
-        this.charset = new TUTF8Charset();
+        this.charset = TUTF8Charset.INSTANCE;
     }
 
     public TPrintStream(TOutputStream out) {
@@ -199,6 +199,21 @@ public class TPrintStream extends TFilterOutputStream {
 
     public void println(double d) {
         sb.append(d).append('\n');
+        printSB();
+    }
+
+    public void println(float d) {
+        sb.append(d).append('\n');
+        printSB();
+    }
+
+    public void println(char c) {
+        sb.append(c);
+        printSB();
+    }
+
+    public void println(boolean b) {
+        sb.append(b);
         printSB();
     }
 

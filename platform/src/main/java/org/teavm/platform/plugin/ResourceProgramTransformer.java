@@ -35,6 +35,7 @@ class ResourceProgramTransformer {
             Object.class, String[].class);
     private static final MethodReference GET_PROPERTY = new MethodReference(ResourceAccessor.class, "getProperty",
             Object.class, String.class, Object.class);
+    private static final ValueType RESOURCE = ValueType.parse(Resource.class);
 
     private ClassHierarchy hierarchy;
     private Program program;
@@ -59,7 +60,29 @@ class ResourceProgramTransformer {
                     insn.insertNextAll(replacement);
                     insn.delete();
                 }
+            } else if (insn instanceof CastInstruction) {
+                removeCastToResource((CastInstruction) insn);
             }
+        }
+    }
+
+    void removeCasts() {
+        for (BasicBlock block : program.getBasicBlocks()) {
+            for (Instruction insn : block) {
+                if (insn instanceof CastInstruction) {
+                    removeCastToResource((CastInstruction) insn);
+                }
+            }
+        }
+    }
+
+    private void removeCastToResource(CastInstruction cast) {
+        if (hierarchy.isSuperType(RESOURCE, cast.getTargetType(), false)) {
+            AssignInstruction assign = new AssignInstruction();
+            assign.setReceiver(cast.getReceiver());
+            assign.setAssignee(cast.getValue());
+            assign.setLocation(cast.getLocation());
+            cast.replace(assign);
         }
     }
 
@@ -171,13 +194,7 @@ class ResourceProgramTransformer {
                     return instructions;
                 }
                 default: {
-                    Variable resultVar = insn.getProgram().createVariable();
-                    getProperty(insn, property, instructions, resultVar);
-                    CastInstruction castInsn = new CastInstruction();
-                    castInsn.setReceiver(insn.getReceiver());
-                    castInsn.setTargetType(type);
-                    castInsn.setValue(resultVar);
-                    instructions.add(castInsn);
+                    getProperty(insn, property, instructions, insn.getReceiver());
                     return instructions;
                 }
             }
